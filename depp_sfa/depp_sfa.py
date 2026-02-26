@@ -7,7 +7,7 @@ from scipy.optimize import minimize
 from sklearn.linear_model import LinearRegression
 import pymc as pm
 
-import constant
+from . import constant
 
 
 FUN_COST = constant.FUN_COST
