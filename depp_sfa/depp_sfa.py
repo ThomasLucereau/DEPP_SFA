@@ -319,10 +319,14 @@ class SFA:
         # Initial OLS to get starting values
         reg = LinearRegression(fit_intercept=False).fit(x_mat, self.y)
 
+        # Calculate OLS residuals manually
+        y_pred = reg.predict(x_mat)
+        resid_var = np.var(self.y - y_pred)
+
         # Initial params: [beta, mu, eta, sigma_sq, gamma]
         start_params = np.concatenate([
             reg.coef_,
-            [0.0, 0.01, np.var(reg.resid_), 0.5]
+            [0.0, 0.01, resid_var, 0.5]
         ])
 
         def bc92_ll(params):
