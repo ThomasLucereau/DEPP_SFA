@@ -320,21 +320,15 @@ class SFA:
         reg = LinearRegression(fit_intercept=False).fit(x_mat, self.y)
         y_pred = reg.predict(x_mat)
         resid_var = np.var(self.y - y_pred)
-
-        # Initial params: [beta..., eta, sigma_sq, gamma]
-        start_params = np.concatenate([
-            reg.coef_,
-            [0.01, resid_var, 0.5]
-        ])
+        beta_ols = reg.coef_
 
         def bc92_ll(params):
             num_k = x_mat.shape[1]
             beta = params[:num_k]
-            # On décale les index puisqu'il n'y a plus de mu
+
             eta = params[num_k]
             sig2, gamma = params[num_k + 1], params[num_k + 2]
 
-            # On FORCE mu à 0 pour matcher le comportement par défaut de R
             mu = 0.0
 
             # Hard constraints for stability
@@ -379,29 +373,40 @@ class SFA:
 
             return -total_ll
 
-        # Optimization
+        # R-Style Grid Search (L'arme secrète pour trouver le même optimum)
+        best_ll = float('inf')
+        best_start = None
+
+        for g_test in np.linspace(0.1, 0.9, 9):
+
+            for e_test in [-0.05, 0.0, 0.05]:
+                test_params = np.concatenate([beta_ols,
+                                              [e_test, resid_var, g_test]])
+
+                current_ll = bc92_ll(test_params)
+
+                if current_ll < best_ll:
+                    best_ll = current_ll
+                    best_start = test_params
+
+        # Optimization depuis le MEILLEUR point de départ trouvé
         bounds = (
             [(None, None)] * x_mat.shape[1] +
-            [(None, None), (1e-10, None), (1e-10, 0.999999)]
+            [(None, None), (1e-6, None), (1e-6, 0.9999)]
         )
 
         res = minimize(
             bc92_ll,
-            start_params,
+            best_start,
             method='L-BFGS-B',
             bounds=bounds,
-            options={
-                'ftol': 1e-12,
-                'gtol': 1e-8,
-                'maxiter': 5000,
-                'maxfun': 5000
-            }
+            options={'ftol': 1e-12, 'gtol': 1e-8}
         )
 
         self._params = res.x
         self._llf = -res.fun
 
-        # 4. Standard Errors (from Hessian)
+        # Standard Errors (from Hessian)
         try:
             self._std_err = np.sqrt(np.diag(res.hess_inv.todense()))
         except (AttributeError, ValueError):
