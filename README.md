@@ -1,6 +1,6 @@
-# DEPP_SFA: Stochastic Frontier Analysis
+# depp_SFA: Stochastic Frontier Analysis
 
-DEPP_SFA is a Python library dedicated to the estimation of Stochastic Frontier Analysis (SFA) models. 
+depp_SFA is a Python library dedicated to the estimation of Stochastic Frontier Analysis (SFA) models. 
 
 It is designed to provide high robustness against the numerical convergence issues frequently encountered in applied econometrics. For cross-sectional data, the library relies primarily on Maximum Likelihood Estimation (MLE), featuring an automatic fallback to Bayesian estimation (MCMC via PyMC) in the event of optimization failure. For panel data, it implements a strictly Bayesian estimation of the dynamic Battese and Coelli (1992) model.
 
@@ -17,7 +17,7 @@ It is designed to provide high robustness against the numerical convergence issu
 The library can be installed directly from its Git repository:
 
 ```bash
-pip install -U git+https://github.com/ThomasLucereau/DEPP_SFA.git
+pip install -U git+https://github.com/ThomasLucereau/depp_SFA.git
 ```
 
 ## Usage and Quick Start
@@ -28,7 +28,7 @@ It is strongly recommended to standardize (center and scale) continuous variable
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from depp_sfa import SFA, FUN_COST, TE_teJ
+from depp_SFA import SFA, FUN_COST, TE_teJ
 
 # 1. Data preparation
 df = pd.read_csv("data.csv")
