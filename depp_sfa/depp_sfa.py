@@ -318,29 +318,30 @@ class SFA:
 
         # Initial OLS to get starting values
         reg = LinearRegression(fit_intercept=False).fit(x_mat, self.y)
-
-        # Calculate OLS residuals manually
         y_pred = reg.predict(x_mat)
         resid_var = np.var(self.y - y_pred)
 
-        # Initial params: [beta, mu, eta, sigma_sq, gamma]
+        # Initial params: [beta..., eta, sigma_sq, gamma]
         start_params = np.concatenate([
             reg.coef_,
-            [0.0, 0.01, resid_var, 0.5]
+            [0.01, resid_var, 0.5]
         ])
 
         def bc92_ll(params):
             num_k = x_mat.shape[1]
             beta = params[:num_k]
-            mu, eta = params[num_k], params[num_k + 1]
-            sig2, gamma = params[num_k + 2], params[num_k + 3]
+            # On décale les index puisqu'il n'y a plus de mu
+            eta = params[num_k]
+            sig2, gamma = params[num_k + 1], params[num_k + 2]
+
+            # On FORCE mu à 0 pour matcher le comportement par défaut de R
+            mu = 0.0
 
             # Hard constraints for stability
             if sig2 <= 0 or gamma <= 0 or gamma >= 1:
                 return 1e15
 
             epsilon = self.y - np.dot(x_mat, beta)
-            # Time decay: exp(-eta * (t - Ti))
             t_diff = self.time_array - self.T_max_per_firm[self.firm_idx]
             f_it = np.exp(-eta * t_diff)
 
@@ -348,7 +349,6 @@ class SFA:
             sig_v2 = (1 - gamma) * sig2
             total_ll = 0
 
-            # Loop over firms to calculate the joint density of the panel
             for i in range(self.num_firms):
                 mask = self.firm_idx == i
                 eps_i, f_i = epsilon[mask], f_it[mask]
@@ -357,7 +357,6 @@ class SFA:
                 sum_f2 = np.sum(f_i**2)
                 sum_f_eps = np.sum(f_i * eps_i)
 
-                # BC92 specific analytical terms (mu* and sigma*)
                 di_term = 1 + (sig_u2 / sig_v2) * sum_f2
                 mu_star = (
                     (mu * sig_v2 - self.sign * sig_u2 * sum_f_eps) /
@@ -367,7 +366,6 @@ class SFA:
                     (sig_u2 * sig_v2) / (sig_v2 + sig_u2 * sum_f2)
                 )
 
-                # Log-likelihood contribution for firm i
                 ll_i = (
                     -0.5 * num_ti * np.log(2 * np.pi * sig_v2)
                     - 0.5 * (np.sum(eps_i**2) / sig_v2)
@@ -381,10 +379,10 @@ class SFA:
 
             return -total_ll
 
-        # 3. Optimization
+        # Optimization (On enlève une condition 'None' car mu a disparu)
         bounds = (
             [(None, None)] * x_mat.shape[1] +
-            [(None, None), (None, None), (1e-10, None), (1e-10, 0.999999)]
+            [(None, None), (1e-10, None), (1e-10, 0.999999)]
         )
 
         res = minimize(
@@ -485,7 +483,7 @@ class SFA:
     def __extract_pymc_params(self, trace, model_type):
         """
         Standardize PyMC output into standard numpy arrays.
-        Calculates standard errors for derived parameters like sigma2 and gamma.
+        Calculates standard errors for derived parameters eg. sigma2 and gamma.
         """
         self.pymc_trace = trace
         post = trace.posterior
@@ -633,11 +631,10 @@ class SFA:
 
         # Append variance/inefficiency parameter names
         if self.is_panel:
-            names += ['mu', 'eta', 'sigma2', 'gamma']
-        elif self.has_z:
-            names += self.z_names + ['sigma2', 'gamma']
-        else:
-            names += ['lambda']
+            if self.inference_method == 'mle':
+                names += ['eta', 'sigma2', 'gamma'] 
+            else:
+                names += ['mu', 'eta', 'sigma2', 'gamma']
 
         params = self._params
         std_err = self._std_err
