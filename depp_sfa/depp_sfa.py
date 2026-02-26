@@ -162,20 +162,36 @@ class SFA:
         if self.is_fitted:
             return
 
-        if self.is_panel:
-            self.__optimize_pymc_panel()
-            self.estimation_method = 'PyMC (Panel BC92)'
-        else:
+        import warnings
+        import logging
+
+        # Temporarily suppress standard warnings during estimation
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+
+            # Temporarily suppress PyMC logging
+            logger = logging.getLogger("pymc")
+            old_level = logger.level
+            logger.setLevel(logging.ERROR)
+
             try:
-                self.__optimize_mle()
-                self.estimation_method = 'MLE'
-            except Exception as e:
-                print(
-                    f"[Warning] MLE convergence failed ({str(e)}). "
-                    "Fallback to PyMC sampling..."
-                )
-                self.__optimize_pymc_cross()
-                self.estimation_method = 'PyMC (Cross)'
+                if self.is_panel:
+                    self.__optimize_pymc_panel()
+                    self.estimation_method = 'PyMC (Panel BC92)'
+                else:
+                    try:
+                        self.__optimize_mle()
+                        self.estimation_method = 'MLE'
+                    except Exception as e:
+                        print(
+                            f"[Warning] MLE convergence failed ({str(e)}). "
+                            "Fallback to PyMC sampling..."
+                        )
+                        self.__optimize_pymc_cross()
+                        self.estimation_method = 'PyMC (Cross)'
+            finally:
+                # Restore original logging level after estimation
+                logger.setLevel(old_level)
 
         self.is_fitted = True
 
