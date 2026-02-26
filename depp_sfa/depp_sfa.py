@@ -379,7 +379,7 @@ class SFA:
 
             return -total_ll
 
-        # Optimization (On enlève une condition 'None' car mu a disparu)
+        # Optimization
         bounds = (
             [(None, None)] * x_mat.shape[1] +
             [(None, None), (1e-10, None), (1e-10, 0.999999)]
@@ -389,7 +389,13 @@ class SFA:
             bc92_ll,
             start_params,
             method='L-BFGS-B',
-            bounds=bounds
+            bounds=bounds,
+            options={
+                'ftol': 1e-12,
+                'gtol': 1e-8,
+                'maxiter': 5000,
+                'maxfun': 5000
+            }
         )
 
         self._params = res.x
@@ -632,7 +638,7 @@ class SFA:
         # Append variance/inefficiency parameter names
         if self.is_panel:
             if self.inference_method == 'mle':
-                names += ['eta', 'sigma2', 'gamma'] 
+                names += ['eta', 'sigma2', 'gamma']
             else:
                 names += ['mu', 'eta', 'sigma2', 'gamma']
 
