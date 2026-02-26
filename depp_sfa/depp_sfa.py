@@ -32,7 +32,7 @@ class SFA:
     def __init__(
         self, y, x, z=None, id_var=None, time_var=None,
         fun=FUN_PROD, intercept=True, lamda0=1, method=TE_teJ,
-        form='linear', dummy_indices=None
+        form='linear', dummy_indices=None, inference_method='bayesian'
     ):
         self.fun = fun
         self.intercept = intercept
@@ -41,6 +41,11 @@ class SFA:
         self.form = form
         self.dummy_indices = dummy_indices if dummy_indices is not None else []
         self.sign = -1 if self.fun == self.FUN_COST else 1
+        self.inference_method = inference_method.lower()
+        self.sign = -1 if self.fun == self.FUN_COST else 1
+
+        # Internal flag for model type
+        self.is_panel = (id_var is not None) and (time_var is not None)
 
         # Ensure proper input data types
         y = np.array(y, dtype=float)
@@ -158,39 +163,44 @@ class SFA:
             return log_y, np.hstack(new_x_cols), final_names
 
     def optimize(self):
-        """Main estimation router."""
+        """
+        Main estimation router: Switches between MLE and Bayesian inference.
+        Includes warning suppression for cleaner console output during
+        optimization.
+        """
         if self.is_fitted:
             return
 
         import warnings
         import logging
 
-        # Temporarily suppress standard warnings during estimation
+        # Mute RuntimeWarnings during optimization
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
 
-            # Temporarily suppress PyMC logging
+            # Mute PyMC internal logging to keep the terminal clean
             logger = logging.getLogger("pymc")
             old_level = logger.level
             logger.setLevel(logging.ERROR)
 
             try:
-                if self.is_panel:
-                    self.__optimize_pymc_panel()
-                    self.estimation_method = 'PyMC (Panel BC92)'
-                else:
-                    try:
+                if self.inference_method == 'mle':
+                    if self.is_panel:
+                        self.__optimize_mle_panel()
+                        self.estimation_method = 'MLE (Panel BC92)'
+                    else:
                         self.__optimize_mle()
-                        self.estimation_method = 'MLE'
-                    except Exception as e:
-                        print(
-                            f"[Warning] MLE convergence failed ({str(e)}). "
-                            "Fallback to PyMC sampling..."
-                        )
+                        self.estimation_method = 'MLE (Cross)'
+                else:
+                    if self.is_panel:
+                        self.__optimize_pymc_panel()
+                        self.estimation_method = 'PyMC (Panel BC92)'
+                    else:
                         self.__optimize_pymc_cross()
                         self.estimation_method = 'PyMC (Cross)'
+
             finally:
-                # Restore original logging level after estimation
+                # Restore logging level after estimation
                 logger.setLevel(old_level)
 
         self.is_fitted = True
@@ -293,6 +303,102 @@ class SFA:
         self._std_err = np.sqrt(np.diag(hessian))
         self._llf = -res.fun
 
+    def __optimize_mle_panel(self):
+        """
+        Frequentist MLE for BC92.
+        Replicates R 'frontier' package logic (Battese & Coelli 1992).
+        """
+        from scipy.special import ndtr
+
+        # Prepare data matrix
+        if self.intercept:
+            x_mat = np.hstack([np.ones((self.x.shape[0], 1)), self.x])
+        else:
+            x_mat = self.x
+
+        # Initial OLS to get starting values
+        reg = LinearRegression(fit_intercept=False).fit(x_mat, self.y)
+
+        # Initial params: [beta, mu, eta, sigma_sq, gamma]
+        start_params = np.concatenate([
+            reg.coef_,
+            [0.0, 0.01, np.var(reg.resid_), 0.5]
+        ])
+
+        def bc92_ll(params):
+            num_k = x_mat.shape[1]
+            beta = params[:num_k]
+            mu, eta = params[num_k], params[num_k + 1]
+            sig2, gamma = params[num_k + 2], params[num_k + 3]
+
+            # Hard constraints for stability
+            if sig2 <= 0 or gamma <= 0 or gamma >= 1:
+                return 1e15
+
+            epsilon = self.y - np.dot(x_mat, beta)
+            # Time decay: exp(-eta * (t - Ti))
+            t_diff = self.time_array - self.T_max_per_firm[self.firm_idx]
+            f_it = np.exp(-eta * t_diff)
+
+            sig_u2 = gamma * sig2
+            sig_v2 = (1 - gamma) * sig2
+            total_ll = 0
+
+            # Loop over firms to calculate the joint density of the panel
+            for i in range(self.num_firms):
+                mask = self.firm_idx == i
+                eps_i, f_i = epsilon[mask], f_it[mask]
+                num_ti = len(eps_i)
+
+                sum_f2 = np.sum(f_i**2)
+                sum_f_eps = np.sum(f_i * eps_i)
+
+                # BC92 specific analytical terms (mu* and sigma*)
+                di_term = 1 + (sig_u2 / sig_v2) * sum_f2
+                mu_star = (
+                    (mu * sig_v2 - self.sign * sig_u2 * sum_f_eps) /
+                    (sig_v2 + sig_u2 * sum_f2)
+                )
+                sig_star = np.sqrt(
+                    (sig_u2 * sig_v2) / (sig_v2 + sig_u2 * sum_f2)
+                )
+
+                # Log-likelihood contribution for firm i
+                ll_i = (
+                    -0.5 * num_ti * np.log(2 * np.pi * sig_v2)
+                    - 0.5 * (np.sum(eps_i**2) / sig_v2)
+                    - 0.5 * (mu**2 / sig_u2)
+                    + 0.5 * (mu_star**2 / sig_star**2)
+                    + np.log(np.maximum(ndtr(mu_star / sig_star), 1e-20))
+                    - np.log(np.maximum(ndtr(mu / np.sqrt(sig_u2)), 1e-20))
+                    - 0.5 * np.log(di_term)
+                )
+                total_ll += ll_i
+
+            return -total_ll
+
+        # 3. Optimization
+        bounds = (
+            [(None, None)] * x_mat.shape[1] +
+            [(None, None), (None, None), (1e-10, None), (1e-10, 0.999999)]
+        )
+
+        res = minimize(
+            bc92_ll,
+            start_params,
+            method='L-BFGS-B',
+            bounds=bounds
+        )
+
+        self._params = res.x
+        self._llf = -res.fun
+
+        # 4. Standard Errors (from Hessian)
+        try:
+            self._std_err = np.sqrt(np.diag(res.hess_inv.todense()))
+        except (AttributeError, ValueError):
+            self._std_err = np.full_like(res.x, np.nan)
+
     def __optimize_pymc_cross(self):
         """Bayesian Fallback for Cross-sectional."""
         with pm.Model() as model:
@@ -373,49 +479,70 @@ class SFA:
             self.__extract_pymc_params(trace, model_type='panel')
 
     def __extract_pymc_params(self, trace, model_type):
-        """Standardize PyMC output into standard numpy arrays."""
+        """
+        Standardize PyMC output into standard numpy arrays.
+        Calculates standard errors for derived parameters like sigma2 and gamma.
+        """
         self.pymc_trace = trace
         post = trace.posterior
 
+        # Extract Betas
         beta_m = post['beta'].mean(dim=['chain', 'draw']).values
         beta_s = post['beta'].std(dim=['chain', 'draw']).values
 
         if self.intercept:
-            betas = np.concatenate(([post['beta0'].mean().values], beta_m))
-            betas_se = np.concatenate(([post['beta0'].std().values], beta_s))
+            betas = np.concatenate(
+                ([post['beta0'].mean().values], beta_m)
+            )
+            betas_se = np.concatenate(
+                ([post['beta0'].std().values], beta_s)
+            )
         else:
             betas, betas_se = beta_m, beta_s
 
-        su_m = post['sigma_u'].mean().values
-        sv_m = post['sigma_v'].mean().values
+        # 1. Extract full posterior distributions for sigmas
+        sigma_u_post = post['sigma_u']
+        sigma_v_post = post['sigma_v']
+
+        # 2. Derive posterior distributions for sigma2 and gamma
+        sigma2_post = sigma_u_post**2 + sigma_v_post**2
+        gamma_post = (sigma_u_post**2) / sigma2_post
+
+        # 3. Calculate Means and Standard Errors (Std Dev of posterior)
+        sigma2_m = sigma2_post.mean().values
+        sigma2_s = sigma2_post.std().values
+        gamma_m = gamma_post.mean().values
+        gamma_s = gamma_post.std().values
 
         if model_type == 'panel':
-            eta_m, mu_m = post['eta'].mean().values, post['mu'].mean().values
-            eta_s, mu_s = post['eta'].std().values, post['mu'].std().values
-            gamma = (su_m**2) / (su_m**2 + sv_m**2)
+            eta_m = post['eta'].mean().values
+            eta_s = post['eta'].std().values
+            mu_m = post['mu'].mean().values
+            mu_s = post['mu'].std().values
 
             self._params = np.concatenate(
-                (betas, [mu_m, eta_m, su_m**2 + sv_m**2, gamma])
+                (betas, [mu_m, eta_m, sigma2_m, gamma_m])
             )
             self._std_err = np.concatenate(
-                (betas_se, [mu_s, eta_s, np.nan, np.nan])
+                (betas_se, [mu_s, eta_s, sigma2_s, gamma_s])
             )
 
         elif self.has_z:
             delta_m = post['delta'].mean(dim=['chain', 'draw']).values
             delta_s = post['delta'].std(dim=['chain', 'draw']).values
-            gamma = (su_m**2) / (su_m**2 + sv_m**2)
 
             self._params = np.concatenate(
-                (betas, delta_m, [su_m**2 + sv_m**2, gamma])
+                (betas, delta_m, [sigma2_m, gamma_m])
             )
             self._std_err = np.concatenate(
-                (betas_se, delta_s, [np.nan, np.nan])
+                (betas_se, delta_s, [sigma2_s, gamma_s])
             )
 
         else:
-            self._params = np.concatenate((betas, [su_m / sv_m]))
-            self._std_err = np.concatenate((betas_se, [np.nan]))
+            # Cross-sectional basic model
+            lam_post = sigma_u_post / sigma_v_post
+            self._params = np.concatenate((betas, [lam_post.mean().values]))
+            self._std_err = np.concatenate((betas_se, [lam_post.std().values]))
 
         self._llf = np.nan
 
@@ -488,15 +615,19 @@ class SFA:
                 raise ValueError("Undefined decomposition technique.")
 
     def summary(self):
-        """Print the summary of the SFA model with significance stars."""
+        """
+        Print the summary of the SFA model with significance stars.
+        Outputs a clean, R-style regression table.
+        """
         self.optimize()
 
-        # Prepare variable names
+        # 1. Prepare variable names based on model specification
         if self.intercept:
             names = ['(Intercept)'] + self.x_names
         else:
-            names = self.x_names
+            names = list(self.x_names)
 
+        # Append variance/inefficiency parameter names
         if self.is_panel:
             names += ['mu', 'eta', 'sigma2', 'gamma']
         elif self.has_z:
@@ -507,12 +638,12 @@ class SFA:
         params = self._params
         std_err = self._std_err
 
-        # Calculate t-values and p-values
+        # 2. Calculate z-values and p-values safely
         with np.errstate(divide='ignore', invalid='ignore'):
-            t_values = params / std_err
-            p_values = 2 * norm.sf(np.abs(t_values))
+            z_values = params / std_err
+            p_values = 2 * norm.sf(np.abs(z_values))
 
-        # Assign significance stars
+        # 3. Assign significance stars
         stars = []
         for p in p_values:
             if np.isnan(p):
@@ -526,21 +657,26 @@ class SFA:
             else:
                 stars.append('')
 
-        # Create presentation table (Pandas DataFrame)
-        re = pd.DataFrame({
-            'Estimate': np.round(params, 5),
-            'Std. Error': np.round(std_err, 6),
-            't value': np.round(t_values, 3),
-            'Pr(>|t|)': np.round(p_values, 4),
-            'Sig.': stars
-        }, index=names)
+        # 4. Create presentation table (Pandas DataFrame)
+        res_table = pd.DataFrame(
+            {
+                'Estimate': np.round(params, 5),
+                'Std. Error': np.round(std_err, 6),
+                'z value': np.round(z_values, 3),
+                'Pr(>|z|)': np.round(p_values, 4),
+                'Sig.': stars,
+            },
+            index=names
+        )
 
-        # Final output display
+        # 5. Final output display
         print(f"\nStochastic Frontier Analysis ({self.estimation_method})")
         print("=" * 75)
-        print(re.to_string(na_rep='NaN'))
+        print(res_table.to_string(na_rep='NaN'))
         print("-" * 75)
         print("Signif. codes:  0 '***' 0.01 '**' 0.05 '*' 0.1 ' ' 1")
+
+        # Print Log-Likelihood if available (MLE mode)
         if not np.isnan(self._llf):
             print(f"Log-Likelihood:  {self._llf:.5f}")
         print("=" * 75)
