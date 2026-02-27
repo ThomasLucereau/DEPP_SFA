@@ -206,34 +206,38 @@ class SFA:
         else:
             beta_init = reg.coef_
 
+        K = len(beta_init)
+        N = len(self.x)
+
         if self.has_z:
             delta_init = np.zeros(self.z.shape[1])
             parm = np.concatenate(
                 (beta_init, delta_init, [np.var(reg.resid_), 0.5])
             )
         else:
-            parm = np.concatenate((beta_init, [self.lamda0]))
+            # NEW: Initialize sigma2 and gamma directly for base cross-sectional
+            lam0 = self.lamda0
+            gamma_init = (lam0**2) / (1 + lam0**2)
+            parm = np.concatenate((beta_init, [np.var(reg.resid_), gamma_init]))
 
         def __loglik(p):
-            N = len(self.x)
-            K = len(self.x[0]) + (1 if self.intercept else 0)
-
             if not self.has_z:
-                beta0, lamda0 = p[0:K], p[K]
-                if self.intercept:
-                    y_pred = beta0[0] + np.dot(self.x, beta0[1:])
-                else:
-                    y_pred = np.dot(self.x, beta0)
+                beta = p[0:K]
+                sigma2, gamma = p[-2], p[-1]
 
+                if sigma2 <= 0 or gamma <= 0 or gamma >= 0.9999:
+                    return 1e15
+
+                y_pred = beta[0] + np.dot(self.x, beta[1:]) if self.intercept else np.dot(self.x, beta)
                 res = self.y - y_pred
-                sig2 = np.sum(res**2) / N
+                lam = np.sqrt(gamma / (1 - gamma))
                 
-                # Stabilized with log_ndtr
+                # Stabilized Likelihood using explicit sigma2 and gamma
                 ll = (
                     -0.5 * N * np.log(2 * math.pi) 
-                    - 0.5 * N * np.log(sig2)
-                    + np.sum(log_ndtr(-self.sign * res * lamda0 / math.sqrt(sig2)))
-                    - 0.5 * np.sum(res**2) / sig2
+                    - 0.5 * N * np.log(sigma2)
+                    + np.sum(log_ndtr(-self.sign * res * lam / math.sqrt(sigma2)))
+                    - 0.5 * np.sum(res**2) / sigma2
                 )
                 return -ll
             else:
@@ -241,21 +245,16 @@ class SFA:
                 delta = p[K : K + self.z.shape[1]]
                 sigma2, gamma = p[-2], p[-1]
 
-                if sigma2 <= 0 or gamma <= 0 or gamma >= 1:
+                if sigma2 <= 0 or gamma <= 0 or gamma >= 0.9999:
                     return 1e15
 
-                if self.intercept:
-                    y_pred = beta[0] + np.dot(self.x, beta[1:])
-                else:
-                    y_pred = np.dot(self.x, beta)
-
+                y_pred = beta[0] + np.dot(self.x, beta[1:]) if self.intercept else np.dot(self.x, beta)
                 eps = self.sign * (self.y - y_pred)
                 mu = np.dot(self.z, delta)
 
                 sigma_star = np.sqrt(gamma * (1 - gamma) * sigma2)
                 mu_star = (1 - gamma) * mu - gamma * eps
 
-                # Stabilized with log_ndtr
                 ll = (
                     -0.5 * np.log(sigma2)
                     - 0.5 * ((eps + mu)**2 / sigma2)
@@ -264,19 +263,13 @@ class SFA:
                 )
                 return -np.sum(ll)
 
-        method = 'L-BFGS-B' if self.has_z else 'BFGS'
-
+        method = 'L-BFGS-B'
         if self.has_z:
-            bounds = (
-                [(None, None)] * len(beta_init)
-                + [(None, None)] * self.z.shape[1]
-                + [(1e-6, None), (1e-6, 0.9999)]
-            )
+            bounds = ([(None, None)] * K + [(None, None)] * self.z.shape[1] + [(1e-6, None), (1e-6, 0.9999)])
         else:
-            bounds = None
+            bounds = ([(None, None)] * K + [(1e-6, None), (1e-6, 0.9999)])
 
         res = minimize(__loglik, parm, method=method, bounds=bounds)
-        
         self._params = res.x
         self._llf = -res.fun
 
@@ -519,16 +512,12 @@ class SFA:
 
     def get_lambda(self):
         self.optimize()
-        if self.has_z or self.is_panel:
-            gamma = self._params[-1]
-            return np.sqrt(gamma / (1 - gamma))
-        return self._params[-1]
+        gamma = self._params[-1] # Gamma is ALWAYS the last parameter now
+        return np.sqrt(gamma / (1 - gamma))
 
     def get_sigma2(self):
         self.optimize()
-        if self.has_z or self.is_panel:
-            return self._params[-2]
-        return np.sum(self.get_residuals()**2) / len(self.x)
+        return self._params[-2] # Sigma2 is ALWAYS the second to last now
 
     def __teJ(self):
         lam = self.get_lambda()
@@ -581,10 +570,9 @@ class SFA:
         else:
             names = list(self.x_names)
 
+        # Replace the middle part of your summary() function with this:
         if self.is_panel:
             missing_count = len(self._params) - len(names)
-            # MLE estimates 3 extra params (eta, sig2, gamma)
-            # PyMC estimates 4 extra params (mu, eta, sig2, gamma)
             if missing_count == 4:
                 names += ['mu', 'eta', 'sigma2', 'gamma']
             else:
@@ -592,7 +580,8 @@ class SFA:
         elif self.has_z:
             names += self.z_names + ['sigma2', 'gamma']
         else:
-            names += ['lambda']
+            # Now even the basic cross-sectional prints these!
+            names += ['sigma2', 'gamma']
 
         # Failsafe alignment to avoid pandas KeyError
         params = self._params[:len(names)]
