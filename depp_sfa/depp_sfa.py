@@ -215,7 +215,7 @@ class SFA:
                 (beta_init, delta_init, [np.var(reg.resid_), 0.5])
             )
         else:
-            # NEW: Initialize sigma2 and gamma directly for base cross-sectional
+            # Initialize explicitly with sigma2 and gamma for the base model
             lam0 = self.lamda0
             gamma_init = (lam0**2) / (1 + lam0**2)
             parm = np.concatenate((beta_init, [np.var(reg.resid_), gamma_init]))
@@ -255,6 +255,7 @@ class SFA:
                 sigma_star = np.sqrt(gamma * (1 - gamma) * sigma2)
                 mu_star = (1 - gamma) * mu - gamma * eps
 
+                # Stabilized with log_ndtr
                 ll = (
                     -0.5 * np.log(sigma2)
                     - 0.5 * ((eps + mu)**2 / sigma2)
@@ -264,12 +265,21 @@ class SFA:
                 return -np.sum(ll)
 
         method = 'L-BFGS-B'
+
         if self.has_z:
-            bounds = ([(None, None)] * K + [(None, None)] * self.z.shape[1] + [(1e-6, None), (1e-6, 0.9999)])
+            bounds = (
+                [(None, None)] * K
+                + [(None, None)] * self.z.shape[1]
+                + [(1e-6, None), (1e-6, 0.9999)]
+            )
         else:
-            bounds = ([(None, None)] * K + [(1e-6, None), (1e-6, 0.9999)])
+            bounds = (
+                [(None, None)] * K
+                + [(1e-6, None), (1e-6, 0.9999)]
+            )
 
         res = minimize(__loglik, parm, method=method, bounds=bounds)
+        
         self._params = res.x
         self._llf = -res.fun
 
@@ -281,12 +291,8 @@ class SFA:
 
     def __optimize_mle_panel(self):
         """Frequentist MLE for BC92."""
-        if self.intercept:
-            x_mat = np.hstack([np.ones((self.x.shape[0], 1)), self.x])
-        else:
-            x_mat = self.x
+        x_mat = np.hstack([np.ones((self.x.shape[0], 1)), self.x]) if self.intercept else self.x
 
-        # Initial OLS to get starting values
         reg = LinearRegression(fit_intercept=False).fit(x_mat, self.y)
         y_pred = reg.predict(x_mat)
         resid_var = np.var(self.y - y_pred)
@@ -301,7 +307,7 @@ class SFA:
             
             mu = 0.0 # Standard BC92
 
-            if sig2 <= 0 or gamma <= 0 or gamma >= 0.999:
+            if sig2 <= 0 or gamma <= 0 or gamma >= 0.9999:
                 return 1e15
 
             epsilon = self.y - np.dot(x_mat, beta)
@@ -322,7 +328,6 @@ class SFA:
 
                 di_term = 1 + (sig_u2 / sig_v2) * sum_f2
                 
-                # Correctly handle sign for cost vs production
                 mu_star = (
                     (mu * sig_v2 - self.sign * sig_u2 * sum_f_eps) /
                     (sig_v2 + sig_u2 * sum_f2)
@@ -331,7 +336,6 @@ class SFA:
                     (sig_u2 * sig_v2) / (sig_v2 + sig_u2 * sum_f2)
                 )
 
-                # Stabilized likelihood calculation
                 ll_i = (
                     -0.5 * num_ti * np.log(2 * np.pi * sig_v2)
                     - 0.5 * (np.sum(eps_i**2) / sig_v2)
@@ -345,7 +349,6 @@ class SFA:
 
             return -total_ll
 
-        # Grid Search for optimal starting values
         best_ll = float('inf')
         best_start = None
 
@@ -362,7 +365,7 @@ class SFA:
 
         bounds = (
             [(None, None)] * x_mat.shape[1] +
-            [(None, None), (1e-6, None), (1e-6, 0.999)]
+            [(None, None), (1e-6, None), (1e-6, 0.9999)]
         )
 
         res = minimize(
@@ -450,7 +453,7 @@ class SFA:
             self.__extract_pymc_params(trace, model_type='panel')
 
     def __extract_pymc_params(self, trace, model_type):
-        """Standardize PyMC output into standard numpy arrays."""
+        """Standardize PyMC output to perfectly match MLE structure."""
         self.pymc_trace = trace
         post = trace.posterior
 
@@ -492,9 +495,9 @@ class SFA:
             self._std_err = np.concatenate((betas_se, delta_s, [sigma2_s, gamma_s]))
 
         else:
-            lam_post = sigma_u_post / sigma_v_post
-            self._params = np.concatenate((betas, [lam_post.mean().values]))
-            self._std_err = np.concatenate((betas_se, [lam_post.std().values]))
+            # Fully unified: cross-sectional PyMC now explicitly outputs sigma2 and gamma
+            self._params = np.concatenate((betas, [sigma2_m, gamma_m]))
+            self._std_err = np.concatenate((betas_se, [sigma2_s, gamma_s]))
 
         self._llf = np.nan
 
@@ -512,12 +515,14 @@ class SFA:
 
     def get_lambda(self):
         self.optimize()
-        gamma = self._params[-1] # Gamma is ALWAYS the last parameter now
+        # Gamma is mathematically guaranteed to be the very last parameter now
+        gamma = self._params[-1]
         return np.sqrt(gamma / (1 - gamma))
 
     def get_sigma2(self):
         self.optimize()
-        return self._params[-2] # Sigma2 is ALWAYS the second to last now
+        # Sigma2 is mathematically guaranteed to be the second to last parameter now
+        return self._params[-2]
 
     def __teJ(self):
         lam = self.get_lambda()
@@ -525,7 +530,6 @@ class SFA:
         self.sstar = (lam / (1 + lam**2)) * math.sqrt(self.get_sigma2())
         ratio = self.ustar / self.sstar
         
-        # Use log_ndtr to prevent division by zero in normal cdf
         log_term = norm.logpdf(ratio) - log_ndtr(ratio)
         return np.exp(-self.ustar - self.sstar * np.exp(log_term))
 
@@ -564,35 +568,30 @@ class SFA:
         """Print the summary of the SFA model with significance stars."""
         self.optimize()
 
-        # Build dynamic names based on model type
         if self.intercept:
             names = ['(Intercept)'] + list(self.x_names)
         else:
             names = list(self.x_names)
 
-        # Replace the middle part of your summary() function with this:
         if self.is_panel:
-            missing_count = len(self._params) - len(names)
-            if missing_count == 4:
+            if 'PyMC' in self.estimation_method:
                 names += ['mu', 'eta', 'sigma2', 'gamma']
             else:
                 names += ['eta', 'sigma2', 'gamma']
         elif self.has_z:
             names += self.z_names + ['sigma2', 'gamma']
         else:
-            # Now even the basic cross-sectional prints these!
+            # Completely unified output: Basic models print this too
             names += ['sigma2', 'gamma']
 
-        # Failsafe alignment to avoid pandas KeyError
+        # Ensure lengths match strictly
         params = self._params[:len(names)]
         std_err = self._std_err[:len(names)]
 
-        # Calculate z-values and p-values safely
         with np.errstate(divide='ignore', invalid='ignore'):
             z_values = params / std_err
             p_values = 2 * norm.sf(np.abs(z_values))
 
-        # Significance mapping
         stars = []
         for p in p_values:
             if np.isnan(p):
