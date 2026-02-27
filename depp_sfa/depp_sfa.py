@@ -643,9 +643,16 @@ class SFA:
         # Append variance/inefficiency parameter names
         if self.is_panel:
             if self.inference_method == 'mle':
-                names += ['eta', 'sigma2', 'gamma']
+                names += ['eta', 'sigma2', 'gamma'] 
             else:
                 names += ['mu', 'eta', 'sigma2', 'gamma']
+        elif self.has_z:
+            names += self.z_names + ['sigma2', 'gamma']
+        else:
+            if len(self._params) == len(names) + 2:
+                names += ['sigma2', 'gamma']
+            else:
+                names += ['lambda']
 
         params = self._params
         std_err = self._std_err
