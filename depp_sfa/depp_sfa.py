@@ -634,35 +634,43 @@ class SFA:
         """
         self.optimize()
 
-        # 1. Prepare variable names based on model specification
+        # Base parameter names (Betas)
         if self.intercept:
-            names = ['(Intercept)'] + self.x_names
+            names = ['(Intercept)'] + list(self.x_names)
         else:
             names = list(self.x_names)
 
-        # Append variance/inefficiency parameter names
+        # Dynamically add the exact number of missing variance/panel names
+        num_betas = len(names)
+        num_params = len(self._params)
+        missing_count = num_params - num_betas
+
         if self.is_panel:
-            if self.inference_method == 'mle':
-                names += ['eta', 'sigma2', 'gamma'] 
+            if missing_count == 3:
+                names += ['eta', 'sigma2', 'gamma']
             else:
                 names += ['mu', 'eta', 'sigma2', 'gamma']
         elif self.has_z:
             names += self.z_names + ['sigma2', 'gamma']
         else:
-            if len(self._params) == len(names) + 2:
+            # Cross-sectional model
+            if missing_count == 2:
                 names += ['sigma2', 'gamma']
-            else:
+            elif missing_count == 1:
                 names += ['lambda']
+            else:
+                names += [f'var_{i}' for i in range(missing_count)]
 
+        # Extract parameters safely
         params = self._params
         std_err = self._std_err
 
-        # 2. Calculate z-values and p-values safely
+        # Calculate z-values and p-values
         with np.errstate(divide='ignore', invalid='ignore'):
             z_values = params / std_err
             p_values = 2 * norm.sf(np.abs(z_values))
 
-        # 3. Assign significance stars
+        # Assign significance stars
         stars = []
         for p in p_values:
             if np.isnan(p):
@@ -676,7 +684,7 @@ class SFA:
             else:
                 stars.append('')
 
-        # 4. Create presentation table (Pandas DataFrame)
+        # Create presentation table (Pandas DataFrame)
         res_table = pd.DataFrame(
             {
                 'Estimate': np.round(params, 5),
@@ -688,7 +696,7 @@ class SFA:
             index=names
         )
 
-        # 5. Final output display
+        # Final output display
         print(f"\nStochastic Frontier Analysis ({self.estimation_method})")
         print("=" * 75)
         print(res_table.to_string(na_rep='NaN'))
