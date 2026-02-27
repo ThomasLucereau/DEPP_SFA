@@ -631,50 +631,46 @@ class SFA:
         """
         Print the summary of the SFA model with significance stars.
         Outputs a clean, R-style regression table.
-        Bulletproof version to avoid Pandas length mismatches.
         """
         self.optimize()
 
-        # 1. Base parameter names (Betas)
+        # Base parameter names (Betas)
         if self.intercept:
             names = ['(Intercept)'] + list(self.x_names)
         else:
             names = list(self.x_names)
 
-        # 2. Add theoretical variance/inefficiency parameter names
+        # 2. Dynamically add the exact number of missing variance/panel names
+        num_betas = len(names)
+        num_params = len(self._params)
+        missing_count = num_params - num_betas
+
         if self.is_panel:
-            if self.inference_method == 'mle':
-                names += ['eta', 'sigma2', 'gamma'] 
+            if missing_count == 3:
+                names += ['eta', 'sigma2', 'gamma']
             else:
                 names += ['mu', 'eta', 'sigma2', 'gamma']
         elif self.has_z:
-            names += list(self.z_names) + ['sigma2', 'gamma']
+            names += self.z_names + ['sigma2', 'gamma']
         else:
-            names += ['lambda']  # Standard cross-sectional
+            # Cross-sectional model
+            if missing_count == 2:
+                names += ['sigma2', 'gamma']
+            elif missing_count == 1:
+                names += ['lambda']
+            else:
+                names += [f'var_{i}' for i in range(missing_count)]
 
-        # 3. Extract parameters safely and flatten just in case
-        params = np.array(self._params).flatten()
-        std_err = np.array(self._std_err).flatten()
+        # Extract parameters safely
+        params = self._params
+        std_err = self._std_err
 
-        # ---------------------------------------------------------
-        # LE BULLDOZER : Forcer l'alignement des tailles
-        # ---------------------------------------------------------
-        if len(params) != len(names):
-            print(f"[Debug] Attention: L'optimiseur a renvoyé {len(params)} valeurs "
-                f"mais on a {len(names)} noms préparés.")
-            
-            while len(names) < len(params):
-                names.append(f'Var_Fantome_{len(names)}')
-            
-            names = names[:len(params)]
-        # ---------------------------------------------------------
-
-        # 4. Calculate z-values and p-values
+        # Calculate z-values and p-values
         with np.errstate(divide='ignore', invalid='ignore'):
             z_values = params / std_err
             p_values = 2 * norm.sf(np.abs(z_values))
 
-        # 5. Assign significance stars
+        # Assign significance stars
         stars = []
         for p in p_values:
             if np.isnan(p):
@@ -688,7 +684,7 @@ class SFA:
             else:
                 stars.append('')
 
-        # 6. Create presentation table (Pandas DataFrame)
+        # Create presentation table (Pandas DataFrame)
         res_table = pd.DataFrame(
             {
                 'Estimate': np.round(params, 5),
@@ -700,7 +696,7 @@ class SFA:
             index=names
         )
 
-        # 7. Final output display
+        # Final output display
         print(f"\nStochastic Frontier Analysis ({self.estimation_method})")
         print("=" * 75)
         print(res_table.to_string(na_rep='NaN'))
