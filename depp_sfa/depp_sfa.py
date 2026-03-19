@@ -26,7 +26,7 @@ logging.getLogger("pymc").setLevel(logging.ERROR)
 class SFA:
     """
     Stochastic Frontier Analysis (SFA).
-    Supports Cross-sectional (ALS77, BC95) and Panel Data (BC92 Time-varying).
+    Supports Cross-sectional (ALS77, BC95), Panel Data (BC92) and True Effects (Greene 2005).
     """
 
     FUN_PROD = FUN_PROD
@@ -38,7 +38,8 @@ class SFA:
     def __init__(
         self, y, x, z=None, id_var=None, time_var=None,
         fun=FUN_PROD, intercept=True, lamda0=1, method=TE_teJ,
-        form='linear', dummy_indices=None, inference_method='mle'
+        form='linear', dummy_indices=None, inference_method='mle',
+        panel_model='bc92'
     ):
         self.fun = fun
         self.intercept = intercept
@@ -47,10 +48,8 @@ class SFA:
         self.form = form
         self.dummy_indices = dummy_indices if dummy_indices is not None else []
         self.inference_method = inference_method.lower()
+        self.panel_model = panel_model.lower()
 
-        # Set orientation of the inefficiency term
-        # Production: y = x'b + v - u (sign = 1)
-        # Cost:       y = x'b + v + u (sign = -1)
         self.sign = 1 if self.fun == self.FUN_PROD else -1
 
         self.is_panel = (id_var is not None) and (time_var is not None)
@@ -59,27 +58,23 @@ class SFA:
         if self.is_panel and self.has_z:
             raise ValueError(
                 "This class does not currently support combining "
-                "Z variables (BC95) with Panel data (BC92)."
+                "Z variables (BC95) with Panel data."
             )
 
-        # Ensure proper input data types and transform functional form
         y_arr = np.array(y, dtype=float)
         x_arr = np.array(x, dtype=float)
         self.y, self.x, self.x_names = self.__transform_data(
             y_arr, x_arr, self.form, self.dummy_indices
         )
 
-        # Setup Panel Data structures
         if self.is_panel:
             self._setup_panel(id_var, time_var)
-        # Setup inefficiency determinants structures
         elif self.has_z:
             self._setup_z(z)
         else:
             self.z = None
             self.z_names = []
 
-        # Internal state variables
         self.is_fitted = False
         self.estimation_method = None
         self._params = None
@@ -101,6 +96,13 @@ class SFA:
         for i in range(self.num_firms):
             mask = self.firm_idx == i
             self.T_max_per_firm[i] = np.max(self.time_array[mask])
+
+        # === GREENE 2005 (TFE) ===
+        if self.panel_model == 'greene' and self.inference_method == 'mle':
+            firm_dummies = pd.get_dummies(id_var, drop_first=True).astype(float).values
+            self.x = np.hstack((self.x, firm_dummies))
+            dummy_names = [f"Firme_{uid}" for uid in np.unique(id_var)[1:]]
+            self.x_names.extend(dummy_names)
 
     def _setup_z(self, z):
         """Initialize Z variables for BC95 models."""
@@ -174,31 +176,40 @@ class SFA:
 
     def optimize(self):
         """Main estimation router."""
-        if self.is_fitted:
-            return
-
+        if self.is_fitted: return
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
 
+            # === BRANCHE MLE ===
             if self.inference_method == 'mle':
                 if self.is_panel:
-                    self.__optimize_mle_panel()
-                    self.estimation_method = 'MLE (Panel BC92)'
+                    if self.panel_model == 'greene':
+                        self.__optimize_mle()
+                        self.estimation_method = 'MLE (Greene 2005 TFE)'
+                    else:
+                        self.__optimize_mle_panel()
+                        self.estimation_method = 'MLE (Panel BC92)'
                 else:
                     self.__optimize_mle()
-                    self.estimation_method = 'MLE (Cross)'
-            else:
+                    self.estimation_method = 'MLE (BC95 Inefficiency Effects)' if self.has_z else 'MLE (Cross-sectional)'
+
+            # === BRANCHE PyMC ===
+            elif self.inference_method == 'pymc':
                 if self.is_panel:
-                    self.__optimize_pymc_panel()
-                    self.estimation_method = 'PyMC (Panel BC92)'
+                    if self.panel_model == 'greene':
+                        self.__optimize_pymc_greene_tre()
+                        self.estimation_method = 'PyMC (Greene 2005 TRE)'
+                    else:
+                        self.__optimize_pymc_panel()
+                        self.estimation_method = 'PyMC (Panel BC92)'
                 else:
                     self.__optimize_pymc_cross()
-                    self.estimation_method = 'PyMC (Cross)'
+                    self.estimation_method = 'PyMC (BC95 Inefficiency Effects)' if self.has_z else 'PyMC (Cross-sectional)'
 
         self.is_fitted = True
 
     def __optimize_mle(self):
-        """Maximum Likelihood Estimation for Cross-sectional & Z-models."""
+        """Maximum Likelihood Estimation for Cross-sectional, Z-models & TFE."""
         reg = LinearRegression(fit_intercept=self.intercept).fit(X=self.x, y=self.y)
 
         if self.intercept:
@@ -209,17 +220,13 @@ class SFA:
         K = len(beta_init)
         N = len(self.x)
 
-        # CORRECTION : scikit-learn n'a pas .resid_, on calcule la variance manuellement
         y_pred_init = reg.predict(self.x)
         resid_var = np.var(self.y - y_pred_init)
 
         if self.has_z:
             delta_init = np.zeros(self.z.shape[1])
-            parm = np.concatenate(
-                (beta_init, delta_init, [resid_var, 0.5])
-            )
+            parm = np.concatenate((beta_init, delta_init, [resid_var, 0.5]))
         else:
-            # Initialize explicitly with sigma2 and gamma for the base model
             lam0 = self.lamda0
             gamma_init = (lam0**2) / (1 + lam0**2)
             parm = np.concatenate((beta_init, [resid_var, gamma_init]))
@@ -236,7 +243,6 @@ class SFA:
                 res = self.y - y_pred
                 lam = np.sqrt(gamma / (1 - gamma))
                 
-                # Stabilized Likelihood using explicit sigma2 and gamma
                 ll = (
                     -0.5 * N * np.log(2 * math.pi) 
                     - 0.5 * N * np.log(sigma2)
@@ -259,7 +265,6 @@ class SFA:
                 sigma_star = np.sqrt(gamma * (1 - gamma) * sigma2)
                 mu_star = (1 - gamma) * mu - gamma * eps
 
-                # Stabilized with log_ndtr
                 ll = (
                     -0.5 * np.log(sigma2)
                     - 0.5 * ((eps + mu)**2 / sigma2)
@@ -271,16 +276,9 @@ class SFA:
         method = 'L-BFGS-B'
 
         if self.has_z:
-            bounds = (
-                [(None, None)] * K
-                + [(None, None)] * self.z.shape[1]
-                + [(1e-6, None), (1e-6, 0.9999)]
-            )
+            bounds = ([(None, None)] * K + [(None, None)] * self.z.shape[1] + [(1e-6, None), (1e-6, 0.9999)])
         else:
-            bounds = (
-                [(None, None)] * K
-                + [(1e-6, None), (1e-6, 0.9999)]
-            )
+            bounds = ([(None, None)] * K + [(1e-6, None), (1e-6, 0.9999)])
 
         res = minimize(__loglik, parm, method=method, bounds=bounds)
         
@@ -295,8 +293,7 @@ class SFA:
 
     def __optimize_mle_panel(self):
         """Frequentist MLE for BC92."""
-        x_mat = np.hstack([np.ones((self.x.shape[0],
-                                    1)), self.x]) if self.intercept else self.x
+        x_mat = np.hstack([np.ones((self.x.shape[0], 1)), self.x]) if self.intercept else self.x
 
         reg = LinearRegression(fit_intercept=False).fit(x_mat, self.y)
         y_pred = reg.predict(x_mat)
@@ -310,7 +307,7 @@ class SFA:
             sig2 = params[num_k + 1]
             gamma = params[num_k + 2]
 
-            mu = 0.0  # Standard BC92
+            mu = 0.0  
 
             if sig2 <= 0 or gamma <= 0 or gamma >= 0.9999:
                 return 1e15
@@ -333,13 +330,8 @@ class SFA:
 
                 di_term = 1 + (sig_u2 / sig_v2) * sum_f2
 
-                mu_star = (
-                    (mu * sig_v2 - self.sign * sig_u2 * sum_f_eps) /
-                    (sig_v2 + sig_u2 * sum_f2)
-                )
-                sig_star = np.sqrt(
-                    (sig_u2 * sig_v2) / (sig_v2 + sig_u2 * sum_f2)
-                )
+                mu_star = ((mu * sig_v2 - self.sign * sig_u2 * sum_f_eps) / (sig_v2 + sig_u2 * sum_f2))
+                sig_star = np.sqrt((sig_u2 * sig_v2) / (sig_v2 + sig_u2 * sum_f2))
 
                 ll_i = (
                     -0.5 * num_ti * np.log(2 * np.pi * sig_v2)
@@ -359,24 +351,14 @@ class SFA:
 
         for g_test in np.linspace(0.1, 0.9, 9):
             for e_test in [-0.05, 0.0, 0.05]:
-                test_params = np.concatenate([
-                    beta_ols, [e_test, resid_var, g_test]
-                ])
-
+                test_params = np.concatenate([beta_ols, [e_test, resid_var, g_test]])
                 current_ll = bc92_ll(test_params)
                 if current_ll < best_ll:
                     best_ll = current_ll
                     best_start = test_params
 
-        bounds = (
-            [(None, None)] * x_mat.shape[1] +
-            [(None, None), (1e-6, None), (1e-6, 0.9999)]
-        )
-
-        res = minimize(
-            bc92_ll, best_start, method='L-BFGS-B',
-            bounds=bounds, options={'ftol': 1e-12, 'gtol': 1e-8}
-        )
+        bounds = ([(None, None)] * x_mat.shape[1] + [(None, None), (1e-6, None), (1e-6, 0.9999)])
+        res = minimize(bc92_ll, best_start, method='L-BFGS-B', bounds=bounds, options={'ftol': 1e-12, 'gtol': 1e-8})
 
         self._params = res.x
         self._llf = -res.fun
@@ -388,7 +370,7 @@ class SFA:
             self._std_err = np.full_like(res.x, np.nan)
 
     def __optimize_pymc_cross(self):
-        """Bayesian Estimation for Cross-sectional."""
+        """Bayesian Estimation for Cross-sectional & BC95."""
         with pm.Model() as model:
             beta = pm.Normal('beta', mu=0, sigma=10, shape=len(self.x[0]))
 
@@ -402,12 +384,9 @@ class SFA:
             sigma_u = pm.HalfNormal('sigma_u', sigma=5)
 
             if self.has_z:
-                delta = pm.Normal('delta', mu=0, sigma=10,
-                                  shape=self.z.shape[1])
+                delta = pm.Normal('delta', mu=0, sigma=10, shape=self.z.shape[1])
                 mu_u = pm.math.dot(self.z, delta)
-                U = pm.TruncatedNormal(
-                    'U', mu=mu_u, sigma=sigma_u, lower=0, shape=self.x.shape[0]
-                )
+                U = pm.TruncatedNormal('U', mu=mu_u, sigma=sigma_u, lower=0, shape=self.x.shape[0])
             else:
                 U = pm.HalfNormal('U', sigma=sigma_u, shape=self.x.shape[0])
 
@@ -416,10 +395,7 @@ class SFA:
             mu_final = mu_y - U if self.sign == 1 else mu_y + U
             pm.Normal('Y_obs', mu=mu_final, sigma=sigma_v, observed=self.y)
 
-            trace = pm.sample(
-                draws=1000, tune=1000,
-                progressbar=False, return_inferencedata=True
-            )
+            trace = pm.sample(draws=1000, tune=1000, progressbar=False, return_inferencedata=True)
             self.__extract_pymc_params(trace, model_type='cross')
 
     def __optimize_pymc_panel(self):
@@ -439,9 +415,7 @@ class SFA:
             mu = pm.Normal('mu', mu=0, sigma=1)
             eta = pm.Normal('eta', mu=0, sigma=0.2)
 
-            U_i = pm.TruncatedNormal(
-                'U_i', mu=mu, sigma=sigma_u, lower=0, shape=self.num_firms
-            )
+            U_i = pm.TruncatedNormal('U_i', mu=mu, sigma=sigma_u, lower=0, shape=self.num_firms)
 
             time_diff = self.time_array - self.T_max_per_firm[self.firm_idx]
             decay = pm.math.exp(-eta * time_diff)
@@ -452,61 +426,78 @@ class SFA:
             mu_final = mu_y - U_it if self.sign == 1 else mu_y + U_it
             pm.Normal('Y_obs', mu=mu_final, sigma=sigma_v, observed=self.y)
 
-            trace = pm.sample(
-                draws=2000, tune=2000, target_accept=0.99,
-                progressbar=False, return_inferencedata=True
-            )
+            trace = pm.sample(draws=2000, tune=2000, target_accept=0.99, progressbar=False, return_inferencedata=True)
             self.__extract_pymc_params(trace, model_type='panel')
+
+    def __optimize_pymc_greene_tre(self):
+        """Bayesian Estimation for True Random Effects (Greene 2005)."""
+        with pm.Model() as model:
+            beta = pm.Normal('beta', mu=0, sigma=5, shape=len(self.x[0]))
+            
+            # Heterogeneity (Random Effect)
+            mu_alpha = pm.Normal('mu_alpha', mu=0, sigma=5)
+            sigma_alpha = pm.HalfNormal('sigma_alpha', sigma=2)
+            alpha_i = pm.Normal('alpha_i', mu=mu_alpha, sigma=sigma_alpha, shape=self.num_firms)
+
+            mu_y = alpha_i[self.firm_idx] + pm.math.dot(self.x, beta)
+
+            # Inefficiency (Random per observation)
+            sigma_u = pm.HalfNormal('sigma_u', sigma=2)
+            U_it = pm.HalfNormal('U_it', sigma=sigma_u, shape=len(self.y))
+            
+            sigma_v = pm.HalfNormal('sigma_v', sigma=2)
+
+            pm.Deterministic('TE', pm.math.exp(-U_it))
+
+            mu_final = mu_y - U_it if self.sign == 1 else mu_y + U_it
+            pm.Normal('Y_obs', mu=mu_final, sigma=sigma_v, observed=self.y)
+
+            trace = pm.sample(draws=1500, tune=1500, target_accept=0.95, progressbar=False, return_inferencedata=True)
+            self.__extract_pymc_params(trace, model_type='tre')
 
     def __extract_pymc_params(self, trace, model_type):
         """Standardize PyMC output to perfectly match MLE structure."""
         self.pymc_trace = trace
         post = trace.posterior
 
-        # Extract Betas
         beta_m = post['beta'].mean(dim=['chain', 'draw']).values
         beta_s = post['beta'].std(dim=['chain', 'draw']).values
 
-        if self.intercept:
+        if self.intercept and model_type != 'tre': 
             betas = np.concatenate(([post['beta0'].mean().values], beta_m))
             betas_se = np.concatenate(([post['beta0'].std().values], beta_s))
         else:
             betas, betas_se = beta_m, beta_s
 
-        sigma_u_post = post['sigma_u']
-        sigma_v_post = post['sigma_v']
-
-        sigma2_post = sigma_u_post**2 + sigma_v_post**2
-        gamma_post = (sigma_u_post**2) / sigma2_post
-
-        sigma2_m = sigma2_post.mean().values
-        sigma2_s = sigma2_post.std().values
-        gamma_m = gamma_post.mean().values
-        gamma_s = gamma_post.std().values
-
-        if model_type == 'panel':
-            eta_m = post['eta'].mean().values
-            eta_s = post['eta'].std().values
-            mu_m = post['mu'].mean().values
-            mu_s = post['mu'].std().values
-
-            self._params = np.concatenate((betas, [mu_m, eta_m, sigma2_m,
-                                                   gamma_m]))
-            self._std_err = np.concatenate((betas_se, [mu_s, eta_s, sigma2_s,
-                                                       gamma_s]))
-
-        elif self.has_z:
-            delta_m = post['delta'].mean(dim=['chain', 'draw']).values
-            delta_s = post['delta'].std(dim=['chain', 'draw']).values
-
-            self._params = np.concatenate((betas, delta_m, [sigma2_m,
-                                                            gamma_m]))
-            self._std_err = np.concatenate((betas_se, delta_s, [sigma2_s,
-                                                                gamma_s]))
-
+        if model_type == 'tre':
+            mu_alpha_m, mu_alpha_s = post['mu_alpha'].mean().values, post['mu_alpha'].std().values
+            s_alpha_m, s_alpha_s = post['sigma_alpha'].mean().values, post['sigma_alpha'].std().values
+            su_m, su_s = post['sigma_u'].mean().values, post['sigma_u'].std().values
+            sv_m, sv_s = post['sigma_v'].mean().values, post['sigma_v'].std().values
+            self._params = np.concatenate((betas, [mu_alpha_m, s_alpha_m, su_m, sv_m]))
+            self._std_err = np.concatenate((betas_se, [mu_alpha_s, s_alpha_s, su_s, sv_s]))
         else:
-            self._params = np.concatenate((betas, [sigma2_m, gamma_m]))
-            self._std_err = np.concatenate((betas_se, [sigma2_s, gamma_s]))
+            sigma_u_post = post['sigma_u']
+            sigma_v_post = post['sigma_v']
+            sigma2_post = sigma_u_post**2 + sigma_v_post**2
+            gamma_post = (sigma_u_post**2) / sigma2_post
+
+            sigma2_m, sigma2_s = sigma2_post.mean().values, sigma2_post.std().values
+            gamma_m, gamma_s = gamma_post.mean().values, gamma_post.std().values
+
+            if model_type == 'panel':
+                eta_m, eta_s = post['eta'].mean().values, post['eta'].std().values
+                mu_m, mu_s = post['mu'].mean().values, post['mu'].std().values
+                self._params = np.concatenate((betas, [mu_m, eta_m, sigma2_m, gamma_m]))
+                self._std_err = np.concatenate((betas_se, [mu_s, eta_s, sigma2_s, gamma_s]))
+            elif self.has_z:
+                delta_m = post['delta'].mean(dim=['chain', 'draw']).values
+                delta_s = post['delta'].std(dim=['chain', 'draw']).values
+                self._params = np.concatenate((betas, delta_m, [sigma2_m, gamma_m]))
+                self._std_err = np.concatenate((betas_se, delta_s, [sigma2_s, gamma_s]))
+            else:
+                self._params = np.concatenate((betas, [sigma2_m, gamma_m]))
+                self._std_err = np.concatenate((betas_se, [sigma2_s, gamma_s]))
 
         self._llf = np.nan
 
@@ -536,7 +527,6 @@ class SFA:
         self.ustar = -self.sign * self.get_residuals() * (lam**2 / (1+lam**2))
         self.sstar = (lam / (1 + lam**2)) * math.sqrt(self.get_sigma2())
         ratio = self.ustar / self.sstar
-
         log_term = norm.logpdf(ratio) - log_ndtr(ratio)
         return np.exp(-self.ustar - self.sstar * np.exp(log_term))
 
@@ -545,7 +535,6 @@ class SFA:
         self.ustar = -self.sign * self.get_residuals() * (lam**2 / (1+lam**2))
         self.sstar = (lam / (1 + lam**2)) * math.sqrt(self.get_sigma2())
         ratio = self.ustar / self.sstar
-
         log_term = log_ndtr(ratio - self.sstar) - log_ndtr(ratio)
         return np.exp(log_term + (self.sstar**2 / 2) - self.ustar)
 
@@ -558,40 +547,36 @@ class SFA:
         """Returns technical efficiency based on the selected method."""
         self.optimize()
         if self.estimation_method and 'PyMC' in self.estimation_method:
-            return self.pymc_trace.posterior['TE'].mean(
-                dim=['chain', 'draw']
-            ).values
-
-        if self.method == self.TE_teJ:
-            return self.__teJ()
-        elif self.method == self.TE_te:
-            return self.__te()
-        elif self.method == self.TE_teMod:
-            return self.__teMod()
-        else:
-            raise ValueError("Undefined decomposition technique.")
+            return self.pymc_trace.posterior['TE'].mean(dim=['chain', 'draw']).values
+            
+        if self.method == self.TE_teJ: return self.__teJ()
+        elif self.method == self.TE_te: return self.__te()
+        elif self.method == self.TE_teMod: return self.__teMod()
+        else: raise ValueError("Undefined decomposition technique.")
 
     def summary(self):
         """Print the summary of the SFA model with significance stars."""
         self.optimize()
 
-        if self.intercept:
-            names = ['(Intercept)'] + list(self.x_names)
-        else:
-            names = list(self.x_names)
+        names = (['(Intercept)'] + list(self.x_names)) if self.intercept else list(self.x_names)
 
+        # LA CORRECTION EST ICI : Ajustement propre des noms selon le modèle
         if self.is_panel:
-            if 'PyMC' in self.estimation_method:
-                names += ['mu', 'eta', 'sigma2', 'gamma']
+            if self.panel_model == 'greene':
+                if 'PyMC' in self.estimation_method:
+                    names = list(self.x_names) + ['mu_alpha', 'sigma_alpha', 'sigma_u', 'sigma_v']
+                else:
+                    names += ['sigma2', 'gamma'] # TFE se comporte comme Cross
             else:
-                names += ['eta', 'sigma2', 'gamma']
+                if 'PyMC' in self.estimation_method:
+                    names += ['mu', 'eta', 'sigma2', 'gamma']
+                else:
+                    names += ['eta', 'sigma2', 'gamma']
         elif self.has_z:
             names += self.z_names + ['sigma2', 'gamma']
         else:
-            # Completely unified output: Basic models print this too
             names += ['sigma2', 'gamma']
 
-        # Ensure lengths match strictly
         params = self._params[:len(names)]
         std_err = self._std_err[:len(names)]
 
@@ -599,27 +584,10 @@ class SFA:
             z_values = params / std_err
             p_values = 2 * norm.sf(np.abs(z_values))
 
-        stars = []
-        for p in p_values:
-            if np.isnan(p):
-                stars.append('')
-            elif p < 0.01:
-                stars.append('***')
-            elif p < 0.05:
-                stars.append('**')
-            elif p < 0.10:
-                stars.append('*')
-            else:
-                stars.append('')
+        stars = [('***' if p<0.01 else '**' if p<0.05 else '*' if p<0.1 else '') if not np.isnan(p) else '' for p in p_values]
 
         res_table = pd.DataFrame(
-            {
-                'Estimate': np.round(params, 5),
-                'Std. Error': np.round(std_err, 6),
-                'z value': np.round(z_values, 3),
-                'Pr(>|z|)': np.round(p_values, 4),
-                'Sig.': stars,
-            },
+            {'Estimate': np.round(params, 5), 'Std. Error': np.round(std_err, 6), 'z value': np.round(z_values, 3), 'Pr(>|z|)': np.round(p_values, 4), 'Sig.': stars},
             index=names
         )
 
