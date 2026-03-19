@@ -109,7 +109,7 @@ class SFA:
             z_array = np.atleast_2d(z_array)
         if z_array.shape[0] != len(self.y):
             z_array = z_array.T
-            
+
         self.z = np.hstack((np.ones((z_array.shape[0], 1)), z_array))
         self.z_names = ['delta_0'] + [
             f"z{i+1}" for i in range(z_array.shape[1])
@@ -209,16 +209,20 @@ class SFA:
         K = len(beta_init)
         N = len(self.x)
 
+        # CORRECTION : scikit-learn n'a pas .resid_, on calcule la variance manuellement
+        y_pred_init = reg.predict(self.x)
+        resid_var = np.var(self.y - y_pred_init)
+
         if self.has_z:
             delta_init = np.zeros(self.z.shape[1])
             parm = np.concatenate(
-                (beta_init, delta_init, [np.var(reg.resid_), 0.5])
+                (beta_init, delta_init, [resid_var, 0.5])
             )
         else:
             # Initialize explicitly with sigma2 and gamma for the base model
             lam0 = self.lamda0
             gamma_init = (lam0**2) / (1 + lam0**2)
-            parm = np.concatenate((beta_init, [np.var(reg.resid_), gamma_init]))
+            parm = np.concatenate((beta_init, [resid_var, gamma_init]))
 
         def __loglik(p):
             if not self.has_z:
@@ -291,7 +295,8 @@ class SFA:
 
     def __optimize_mle_panel(self):
         """Frequentist MLE for BC92."""
-        x_mat = np.hstack([np.ones((self.x.shape[0], 1)), self.x]) if self.intercept else self.x
+        x_mat = np.hstack([np.ones((self.x.shape[0],
+                                    1)), self.x]) if self.intercept else self.x
 
         reg = LinearRegression(fit_intercept=False).fit(x_mat, self.y)
         y_pred = reg.predict(x_mat)
@@ -304,8 +309,8 @@ class SFA:
             eta = params[num_k]
             sig2 = params[num_k + 1]
             gamma = params[num_k + 2]
-            
-            mu = 0.0 # Standard BC92
+
+            mu = 0.0  # Standard BC92
 
             if sig2 <= 0 or gamma <= 0 or gamma >= 0.9999:
                 return 1e15
@@ -327,7 +332,7 @@ class SFA:
                 sum_f_eps = np.sum(f_i * eps_i)
 
                 di_term = 1 + (sig_u2 / sig_v2) * sum_f2
-                
+
                 mu_star = (
                     (mu * sig_v2 - self.sign * sig_u2 * sum_f_eps) /
                     (sig_v2 + sig_u2 * sum_f2)
@@ -369,7 +374,7 @@ class SFA:
         )
 
         res = minimize(
-            bc92_ll, best_start, method='L-BFGS-B', 
+            bc92_ll, best_start, method='L-BFGS-B',
             bounds=bounds, options={'ftol': 1e-12, 'gtol': 1e-8}
         )
 
@@ -397,7 +402,8 @@ class SFA:
             sigma_u = pm.HalfNormal('sigma_u', sigma=5)
 
             if self.has_z:
-                delta = pm.Normal('delta', mu=0, sigma=10, shape=self.z.shape[1])
+                delta = pm.Normal('delta', mu=0, sigma=10,
+                                  shape=self.z.shape[1])
                 mu_u = pm.math.dot(self.z, delta)
                 U = pm.TruncatedNormal(
                     'U', mu=mu_u, sigma=sigma_u, lower=0, shape=self.x.shape[0]
@@ -411,7 +417,7 @@ class SFA:
             pm.Normal('Y_obs', mu=mu_final, sigma=sigma_v, observed=self.y)
 
             trace = pm.sample(
-                draws=1000, tune=1000, 
+                draws=1000, tune=1000,
                 progressbar=False, return_inferencedata=True
             )
             self.__extract_pymc_params(trace, model_type='cross')
@@ -484,18 +490,21 @@ class SFA:
             mu_m = post['mu'].mean().values
             mu_s = post['mu'].std().values
 
-            self._params = np.concatenate((betas, [mu_m, eta_m, sigma2_m, gamma_m]))
-            self._std_err = np.concatenate((betas_se, [mu_s, eta_s, sigma2_s, gamma_s]))
+            self._params = np.concatenate((betas, [mu_m, eta_m, sigma2_m,
+                                                   gamma_m]))
+            self._std_err = np.concatenate((betas_se, [mu_s, eta_s, sigma2_s,
+                                                       gamma_s]))
 
         elif self.has_z:
             delta_m = post['delta'].mean(dim=['chain', 'draw']).values
             delta_s = post['delta'].std(dim=['chain', 'draw']).values
 
-            self._params = np.concatenate((betas, delta_m, [sigma2_m, gamma_m]))
-            self._std_err = np.concatenate((betas_se, delta_s, [sigma2_s, gamma_s]))
+            self._params = np.concatenate((betas, delta_m, [sigma2_m,
+                                                            gamma_m]))
+            self._std_err = np.concatenate((betas_se, delta_s, [sigma2_s,
+                                                                gamma_s]))
 
         else:
-            # Fully unified: cross-sectional PyMC now explicitly outputs sigma2 and gamma
             self._params = np.concatenate((betas, [sigma2_m, gamma_m]))
             self._std_err = np.concatenate((betas_se, [sigma2_s, gamma_s]))
 
@@ -515,13 +524,11 @@ class SFA:
 
     def get_lambda(self):
         self.optimize()
-        # Gamma is mathematically guaranteed to be the very last parameter now
         gamma = self._params[-1]
         return np.sqrt(gamma / (1 - gamma))
 
     def get_sigma2(self):
         self.optimize()
-        # Sigma2 is mathematically guaranteed to be the second to last parameter now
         return self._params[-2]
 
     def __teJ(self):
@@ -529,7 +536,7 @@ class SFA:
         self.ustar = -self.sign * self.get_residuals() * (lam**2 / (1+lam**2))
         self.sstar = (lam / (1 + lam**2)) * math.sqrt(self.get_sigma2())
         ratio = self.ustar / self.sstar
-        
+
         log_term = norm.logpdf(ratio) - log_ndtr(ratio)
         return np.exp(-self.ustar - self.sstar * np.exp(log_term))
 
@@ -538,7 +545,7 @@ class SFA:
         self.ustar = -self.sign * self.get_residuals() * (lam**2 / (1+lam**2))
         self.sstar = (lam / (1 + lam**2)) * math.sqrt(self.get_sigma2())
         ratio = self.ustar / self.sstar
-        
+
         log_term = log_ndtr(ratio - self.sstar) - log_ndtr(ratio)
         return np.exp(log_term + (self.sstar**2 / 2) - self.ustar)
 
@@ -554,7 +561,7 @@ class SFA:
             return self.pymc_trace.posterior['TE'].mean(
                 dim=['chain', 'draw']
             ).values
-            
+
         if self.method == self.TE_teJ:
             return self.__teJ()
         elif self.method == self.TE_te:
