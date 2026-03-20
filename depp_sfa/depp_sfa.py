@@ -1,3 +1,4 @@
+from inspect import trace
 import math
 import logging
 import warnings
@@ -397,7 +398,7 @@ class SFA:
             mu_final = mu_y - U if self.sign == 1 else mu_y + U
             pm.Normal('Y_obs', mu=mu_final, sigma=sigma_v, observed=self.y)
 
-            trace = pm.sample(draws=1000, tune=1000, progressbar=False, return_inferencedata=True)
+            trace = pm.sample(draws=self.draws, tune=self.tune, progressbar=False, return_inferencedata=True)
             self.__extract_pymc_params(trace, model_type='cross')
 
     def __optimize_pymc_panel(self):
@@ -428,7 +429,7 @@ class SFA:
             mu_final = mu_y - U_it if self.sign == 1 else mu_y + U_it
             pm.Normal('Y_obs', mu=mu_final, sigma=sigma_v, observed=self.y)
 
-            trace = pm.sample(draws=2000, tune=2000, target_accept=0.99, progressbar=False, return_inferencedata=True)
+            trace = pm.sample(draws=self.draws, tune=self.tune, target_accept=0.99, progressbar=False, return_inferencedata=True)
             self.__extract_pymc_params(trace, model_type='panel')
 
     def __optimize_pymc_greene_tre(self, draws=1500, tune=1500):
@@ -454,7 +455,7 @@ class SFA:
             mu_final = mu_y - U_it if self.sign == 1 else mu_y + U_it
             pm.Normal('Y_obs', mu=mu_final, sigma=sigma_v, observed=self.y)
 
-            trace = pm.sample(draws=draws, tune=tune, target_accept=0.95, progressbar=False, return_inferencedata=True)
+            trace = pm.sample(draws=self.draws, tune=self.tune, target_accept=0.95, progressbar=False, return_inferencedata=True)
             self.__extract_pymc_params(trace, model_type='tre')
 
     def __extract_pymc_params(self, trace, model_type):
