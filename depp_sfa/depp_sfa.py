@@ -39,7 +39,7 @@ class SFA:
         self, y, x, z=None, id_var=None, time_var=None,
         fun=FUN_PROD, intercept=True, lamda0=1, method=TE_teJ,
         form='linear', dummy_indices=None, inference_method='mle',
-        panel_model='bc92'
+        panel_model='bc92', draws=1500, tune=1500
     ):
         self.fun = fun
         self.intercept = intercept
@@ -49,6 +49,8 @@ class SFA:
         self.dummy_indices = dummy_indices if dummy_indices is not None else []
         self.inference_method = inference_method.lower()
         self.panel_model = panel_model.lower()
+        self.draws = draws
+        self.tune = tune
 
         self.sign = 1 if self.fun == self.FUN_PROD else -1
 
@@ -429,7 +431,7 @@ class SFA:
             trace = pm.sample(draws=2000, tune=2000, target_accept=0.99, progressbar=False, return_inferencedata=True)
             self.__extract_pymc_params(trace, model_type='panel')
 
-    def __optimize_pymc_greene_tre(self):
+    def __optimize_pymc_greene_tre(self, draws=1500, tune=1500):
         """Bayesian Estimation for True Random Effects (Greene 2005)."""
         with pm.Model() as model:
             beta = pm.Normal('beta', mu=0, sigma=5, shape=len(self.x[0]))
@@ -452,7 +454,7 @@ class SFA:
             mu_final = mu_y - U_it if self.sign == 1 else mu_y + U_it
             pm.Normal('Y_obs', mu=mu_final, sigma=sigma_v, observed=self.y)
 
-            trace = pm.sample(draws=1500, tune=1500, target_accept=0.95, progressbar=False, return_inferencedata=True)
+            trace = pm.sample(draws=draws, tune=tune, target_accept=0.95, progressbar=False, return_inferencedata=True)
             self.__extract_pymc_params(trace, model_type='tre')
 
     def __extract_pymc_params(self, trace, model_type):
