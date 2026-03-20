@@ -455,7 +455,7 @@ class SFA:
             mu_final = mu_y - U_it if self.sign == 1 else mu_y + U_it
             pm.Normal('Y_obs', mu=mu_final, sigma=sigma_v, observed=self.y)
 
-            trace = pm.sample(draws=self.draws, tune=self.tune, target_accept=0.95, progressbar=False, return_inferencedata=True)
+            trace = pm.sample(draws=self.draws, tune=self.tune, target_accept=0.99, progressbar=False, return_inferencedata=True)
             self.__extract_pymc_params(trace, model_type='tre')
 
     def __extract_pymc_params(self, trace, model_type):
