@@ -432,22 +432,19 @@ class SFA:
             trace = pm.sample(draws=self.draws, tune=self.tune, target_accept=0.999, progressbar=False, return_inferencedata=True)
             self.__extract_pymc_params(trace, model_type='panel')
 
-    def __optimize_pymc_greene_tre(self, draws=1500, tune=1500):
-        """Bayesian Estimation for True Random Effects (Greene 2005)."""
+    def __optimize_pymc_greene_tre(self):
         with pm.Model() as model:
             beta = pm.Normal('beta', mu=0, sigma=5, shape=len(self.x[0]))
             
-            # Heterogeneity (Random Effect)
             mu_alpha = pm.Normal('mu_alpha', mu=0, sigma=5)
             sigma_alpha = pm.HalfNormal('sigma_alpha', sigma=2)
-            alpha_i = pm.Normal('alpha_i', mu=mu_alpha, sigma=sigma_alpha, shape=self.num_firms)
+            alpha_offset = pm.Normal('alpha_offset', mu=0, sigma=1, shape=self.num_firms)
+            alpha_i = pm.Deterministic('alpha_i', mu_alpha + alpha_offset * sigma_alpha)
 
             mu_y = alpha_i[self.firm_idx] + pm.math.dot(self.x, beta)
 
-            # Inefficiency (Random per observation)
             sigma_u = pm.HalfNormal('sigma_u', sigma=2)
             U_it = pm.HalfNormal('U_it', sigma=sigma_u, shape=len(self.y))
-            
             sigma_v = pm.HalfNormal('sigma_v', sigma=2)
 
             pm.Deterministic('TE', pm.math.exp(-U_it))
@@ -455,7 +452,13 @@ class SFA:
             mu_final = mu_y - U_it if self.sign == 1 else mu_y + U_it
             pm.Normal('Y_obs', mu=mu_final, sigma=sigma_v, observed=self.y)
 
-            trace = pm.sample(draws=self.draws, tune=self.tune, target_accept=0.999, progressbar=False, return_inferencedata=True)
+            trace = pm.sample(
+                draws=self.draws, 
+                tune=self.tune, 
+                target_accept=0.999, 
+                progressbar=True, 
+                return_inferencedata=True
+            )
             self.__extract_pymc_params(trace, model_type='tre')
 
     def __extract_pymc_params(self, trace, model_type):
