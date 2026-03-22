@@ -557,7 +557,7 @@ class SFA:
         elif self.method == self.TE_teMod: return self.__teMod()
         else: raise ValueError("Undefined decomposition technique.")
 
-def summary(self):
+    def summary(self):
         """Print the summary of the SFA model with significance stars."""
         self.optimize()
 
