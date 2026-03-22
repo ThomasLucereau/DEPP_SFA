@@ -569,23 +569,28 @@ class SFA:
             diag = az.summary(self.pymc_trace)
             for idx in diag.index:
                 ess_map[idx] = diag.loc[idx, 'ess_bulk']
+            
+            # Propagation de l'instabilité pour les paramètres dérivés
+            su_ess = ess_map.get('sigma_u', 9999)
+            sv_ess = ess_map.get('sigma_v', 9999)
+            if su_ess < 400 or sv_ess < 400:
+                ess_map['sigma2'] = 0
+                ess_map['gamma'] = 0
 
         names = (['(Intercept)'] + list(self.x_names)) if self.intercept else list(self.x_names)
-        if self.is_panel:
-            if self.panel_model == 'greene':
-                if 'PyMC' in self.inference_method:
-                    names = list(self.x_names) + ['mu_alpha', 'sigma_alpha', 'sigma_u', 'sigma_v']
-                else:
-                    names += ['sigma2', 'gamma']
+        
+        if self.is_panel and self.panel_model == 'greene':
+            if 'PyMC' in self.inference_method:
+                names += ['mu_alpha', 'sigma_alpha', 'sigma_u', 'sigma_v', 'sigma2', 'gamma']
             else:
-                if 'PyMC' in self.inference_method:
-                    names += ['mu', 'eta', 'sigma2', 'gamma']
-                else:
-                    names += ['eta', 'sigma2', 'gamma']
+                names += ['sigma_u', 'sigma_v', 'sigma2', 'gamma']
+        elif self.is_panel:
+            names += (['mu', 'eta'] if 'PyMC' in self.inference_method else ['eta'])
+            names += ['sigma_u', 'sigma_v', 'sigma2', 'gamma']
         elif self.has_z:
-            names += self.z_names + ['sigma2', 'gamma']
+            names += self.z_names + ['sigma_u', 'sigma_v', 'sigma2', 'gamma']
         else:
-            names += ['sigma2', 'gamma']
+            names += ['sigma_u', 'sigma_v', 'sigma2', 'gamma']
 
         params = self._params[:len(names)]
         std_err = self._std_err[:len(names)]
@@ -598,13 +603,11 @@ class SFA:
         for i, name in enumerate(names):
             current_ess = 9999
             if self.inference_method == 'pymc':
-                if name == '(Intercept)':
-                    key = 'beta0'
+                if name == '(Intercept)': key = 'beta0'
                 elif name in self.x_names:
                     idx_in_x = list(self.x_names).index(name)
                     key = f"beta[{idx_in_x}]"
-                else:
-                    key = name
+                else: key = name
                 current_ess = ess_map.get(key, 9999)
 
             if current_ess < 400:
@@ -633,7 +636,6 @@ class SFA:
         print(res_table.to_string(na_rep='NaN'))
         print("-" * 75)
         print("Signif. codes:  0 '***' 0.01 '**' 0.05 '*' 0.1 ' ' 1")
-
         if not np.isnan(self._llf):
             print(f"Log-Likelihood:  {self._llf:.5f}")
         print("=" * 75)
