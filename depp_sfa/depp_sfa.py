@@ -603,27 +603,27 @@ class SFA:
         display_params = []
         display_std = []
 
-        param_dict = dict(zip(self._names_all, self._params))
-        std_dict = dict(zip(self._names_all, self._std_err))
+        num_main_params = len(self._params) - 2
 
-        for name in names:
-            if name in param_dict and name not in ['sigma_u', 'sigma_v', 'sigma2', 'gamma']:
-                display_params.append(param_dict[name])
-                display_std.append(std_dict[name])
+        for i, name in enumerate(names):
+            if i < num_main_params:
+                display_params.append(self._params[i])
+                display_std.append(self._std_err[i])
             elif name == 'sigma_u':
-                val = param_dict.get('sigma_u', su_val)
-                std = std_dict.get('sigma_u', np.nan)
-                display_params.append(val); display_std.append(std)
+                display_params.append(su_val)
+                display_std.append(np.nan)
             elif name == 'sigma_v':
-                val = param_dict.get('sigma_v', sv_val)
-                std = std_dict.get('sigma_v', np.nan)
-                display_params.append(val); display_std.append(std)
+                display_params.append(sv_val)
+                display_std.append(np.nan)
             elif name == 'sigma2':
-                display_params.append(s2); display_std.append(s2_se)
+                display_params.append(s2)
+                display_std.append(s2_se)
             elif name == 'gamma':
-                display_params.append(gam); display_std.append(gam_se)
+                display_params.append(gam)
+                display_std.append(gam_se)
             else:
-                display_params.append(np.nan); display_std.append(np.nan)
+                display_params.append(np.nan)
+                display_std.append(np.nan)
 
         display_params = np.array(display_params)
         display_std = np.array(display_std)
