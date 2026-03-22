@@ -557,19 +557,27 @@ class SFA:
         elif self.method == self.TE_teMod: return self.__teMod()
         else: raise ValueError("Undefined decomposition technique.")
 
-    def summary(self):
+def summary(self):
         """Print the summary of the SFA model with significance stars."""
         self.optimize()
 
+        # --- CHECK DE LA FIABILITÉ (ESS pour PyMC) ---
+        low_ess = False
+        if self.inference_method == 'pymc' and self.pymc_trace is not None:
+            import arviz as az
+            diag = az.summary(self.pymc_trace)
+            if (diag['ess_bulk'] < 400).any():
+                low_ess = True
+
+        # --- GESTION DES NOMS DES PARAMÈTRES ---
         names = (['(Intercept)'] + list(self.x_names)) if self.intercept else list(self.x_names)
 
-        # LA CORRECTION EST ICI : Ajustement propre des noms selon le modèle
         if self.is_panel:
             if self.panel_model == 'greene':
                 if 'PyMC' in self.estimation_method:
                     names = list(self.x_names) + ['mu_alpha', 'sigma_alpha', 'sigma_u', 'sigma_v']
                 else:
-                    names += ['sigma2', 'gamma'] # TFE se comporte comme Cross
+                    names += ['sigma2', 'gamma']
             else:
                 if 'PyMC' in self.estimation_method:
                     names += ['mu', 'eta', 'sigma2', 'gamma']
@@ -583,22 +591,45 @@ class SFA:
         params = self._params[:len(names)]
         std_err = self._std_err[:len(names)]
 
+        # --- CALCULS STATISTIQUES ---
         with np.errstate(divide='ignore', invalid='ignore'):
             z_values = params / std_err
             p_values = 2 * norm.sf(np.abs(z_values))
 
-        stars = [('***' if p<0.01 else '**' if p<0.05 else '*' if p<0.1 else '') if not np.isnan(p) else '' for p in p_values]
+        # --- CONSTRUCTION DU TABLEAU ---
+        if low_ess:
+            res_table = pd.DataFrame({
+                'Estimate': np.round(params, 5),
+                'Std. Error': 'Low ESS',
+                'z value': '---',
+                'Pr(>|z|)': '---',
+                'Sig.': ''
+            }, index=names)
+        else:
+            stars = [('***' if p < 0.01 else '**' if p < 0.05 else '*' if p < 0.1 else '') 
+                     if not np.isnan(p) else '' for p in p_values]
+            res_table = pd.DataFrame({
+                'Estimate': np.round(params, 5),
+                'Std. Error': np.round(std_err, 6),
+                'z value': np.round(z_values, 3),
+                'Pr(>|z|)': np.round(p_values, 4),
+                'Sig.': stars
+            }, index=names)
 
-        res_table = pd.DataFrame(
-            {'Estimate': np.round(params, 5), 'Std. Error': np.round(std_err, 6), 'z value': np.round(z_values, 3), 'Pr(>|z|)': np.round(p_values, 4), 'Sig.': stars},
-            index=names
-        )
-
+        # --- 5. AFFICHAGE ---
         print(f"\nStochastic Frontier Analysis ({self.estimation_method})")
         print("=" * 75)
+        
+        if low_ess:
+            print(">>> WARNING: Low Effective Sample Size detected. Convergence is poor.")
+            print(">>> Precision metrics (p-values) are hidden to prevent misinterpretation.")
+            print("-" * 75)
+
         print(res_table.to_string(na_rep='NaN'))
         print("-" * 75)
-        print("Signif. codes:  0 '***' 0.01 '**' 0.05 '*' 0.1 ' ' 1")
+        
+        if not low_ess:
+            print("Signif. codes:  0 '***' 0.01 '**' 0.05 '*' 0.1 ' ' 1")
 
         if not np.isnan(self._llf):
             print(f"Log-Likelihood:  {self._llf:.5f}")
