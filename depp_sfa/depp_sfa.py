@@ -570,33 +570,66 @@ class SFA:
             for idx in diag.index:
                 ess_map[idx] = diag.loc[idx, 'ess_bulk']
             
-            # Propagation de l'instabilité pour les paramètres dérivés
             su_ess = ess_map.get('sigma_u', 9999)
             sv_ess = ess_map.get('sigma_v', 9999)
             if su_ess < 400 or sv_ess < 400:
-                ess_map['sigma2'] = 0
-                ess_map['gamma'] = 0
+                ess_map['sigma2'], ess_map['gamma'] = 0, 0
 
         names = (['(Intercept)'] + list(self.x_names)) if self.intercept else list(self.x_names)
         
         if self.is_panel and self.panel_model == 'greene':
-            if 'PyMC' in self.inference_method:
-                names += ['mu_alpha', 'sigma_alpha', 'sigma_u', 'sigma_v', 'sigma2', 'gamma']
+            if 'pymc' in self.inference_method:
+                names = list(self.x_names) + ['mu_alpha', 'sigma_alpha', 'sigma_u', 'sigma_v', 'sigma2', 'gamma']
             else:
                 names += ['sigma_u', 'sigma_v', 'sigma2', 'gamma']
         elif self.is_panel:
-            names += (['mu', 'eta'] if 'PyMC' in self.inference_method else ['eta'])
-            names += ['sigma_u', 'sigma_v', 'sigma2', 'gamma']
+            if 'pymc' in self.inference_method:
+                names += ['mu', 'eta', 'sigma_u', 'sigma_v', 'sigma2', 'gamma']
+            else:
+                names += ['eta', 'sigma_u', 'sigma_v', 'sigma2', 'gamma']
         elif self.has_z:
             names += self.z_names + ['sigma_u', 'sigma_v', 'sigma2', 'gamma']
         else:
             names += ['sigma_u', 'sigma_v', 'sigma2', 'gamma']
 
-        params = self._params[:len(names)]
-        std_err = self._std_err[:len(names)]
+        s2 = self._params[-2]
+        gam = self._params[-1]
+        s2_se = self._std_err[-2]
+        gam_se = self._std_err[-1]
+        
+        su_val = np.sqrt(gam * s2) if gam * s2 > 0 else 0
+        sv_val = np.sqrt((1 - gam) * s2) if (1 - gam) * s2 > 0 else 0
+
+        display_params = []
+        display_std = []
+
+        param_dict = dict(zip(self._names_all, self._params))
+        std_dict = dict(zip(self._names_all, self._std_err))
+
+        for name in names:
+            if name in param_dict and name not in ['sigma_u', 'sigma_v', 'sigma2', 'gamma']:
+                display_params.append(param_dict[name])
+                display_std.append(std_dict[name])
+            elif name == 'sigma_u':
+                val = param_dict.get('sigma_u', su_val)
+                std = std_dict.get('sigma_u', np.nan)
+                display_params.append(val); display_std.append(std)
+            elif name == 'sigma_v':
+                val = param_dict.get('sigma_v', sv_val)
+                std = std_dict.get('sigma_v', np.nan)
+                display_params.append(val); display_std.append(std)
+            elif name == 'sigma2':
+                display_params.append(s2); display_std.append(s2_se)
+            elif name == 'gamma':
+                display_params.append(gam); display_std.append(gam_se)
+            else:
+                display_params.append(np.nan); display_std.append(np.nan)
+
+        display_params = np.array(display_params)
+        display_std = np.array(display_std)
 
         with np.errstate(divide='ignore', invalid='ignore'):
-            z_values = params / std_err
+            z_values = display_params / display_std
             p_values = 2 * norm.sf(np.abs(z_values))
 
         rows = []
@@ -604,15 +637,13 @@ class SFA:
             current_ess = 9999
             if self.inference_method == 'pymc':
                 if name == '(Intercept)': key = 'beta0'
-                elif name in self.x_names:
-                    idx_in_x = list(self.x_names).index(name)
-                    key = f"beta[{idx_in_x}]"
+                elif name in self.x_names: key = f"beta[{list(self.x_names).index(name)}]"
                 else: key = name
                 current_ess = ess_map.get(key, 9999)
 
             if current_ess < 400:
                 rows.append({
-                    'Estimate': np.round(params[i], 5),
+                    'Estimate': np.round(display_params[i], 5),
                     'Std. Error': 'Low ESS',
                     'z value': '---',
                     'Pr(>|z|)': '---',
@@ -620,17 +651,19 @@ class SFA:
                 })
             else:
                 p = p_values[i]
+                std = display_std[i]
+                z = z_values[i]
                 star = ('***' if p < 0.01 else '**' if p < 0.05 else '*' if p < 0.1 else '') if not np.isnan(p) else ''
+                
                 rows.append({
-                    'Estimate': np.round(params[i], 5),
-                    'Std. Error': np.round(std_err[i], 6),
-                    'z value': np.round(z_values[i], 3),
-                    'Pr(>|z|)': np.round(p, 4),
+                    'Estimate': np.round(display_params[i], 5),
+                    'Std. Error': np.round(std, 6) if not np.isnan(std) else '---',
+                    'z value': np.round(z, 3) if not np.isnan(z) else '---',
+                    'Pr(>|z|)': np.round(p, 4) if not np.isnan(p) else '---',
                     'Sig.': star
                 })
 
         res_table = pd.DataFrame(rows, index=names)
-
         print(f"\nStochastic Frontier Analysis ({self.estimation_method})")
         print("=" * 75)
         print(res_table.to_string(na_rep='NaN'))
