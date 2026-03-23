@@ -398,7 +398,7 @@ class SFA:
             mu_final = mu_y - U if self.sign == 1 else mu_y + U
             pm.Normal('Y_obs', mu=mu_final, sigma=sigma_v, observed=self.y)
 
-            trace = pm.sample(draws=self.draws, tune=self.tune, progressbar=False, return_inferencedata=True)
+            trace = pm.sample(draws=self.draws, tune=self.tune, target_accept=0.999, progressbar=False, return_inferencedata=True)
             self.__extract_pymc_params(trace, model_type='cross')
 
     def __optimize_pymc_panel(self):
