@@ -70,7 +70,7 @@ model_bc92 = SFA(
     time_var=years, 
     fun=FUN_COST, 
     panel_model='bc92',
-    inference_method='pymc',
+    inference_method='pymc', # or mle
     draws=2000
 )
 
@@ -91,7 +91,7 @@ model_bc95 = SFA(
     x=X, 
     z=Z_vars,
     fun=FUN_COST,      
-    inference_method='pymc',
+    inference_method='pymc', #or mle
     draws=2000
 )
 
@@ -111,7 +111,7 @@ model_greene = SFA(
     time_var=years,
     fun=FUN_COST,
     panel_model='greene',
-    inference_method='pymc',
+    inference_method='pymc', # or mle
     draws=2000
 )
 
