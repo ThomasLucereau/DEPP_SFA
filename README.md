@@ -1,4 +1,4 @@
-# depp_sfa: stochastic frontier analysis
+# Depp_sfa: stochastic frontier analysis
 
 Depp_sfa is a python library dedicated to the estimation of stochastic frontier analysis (sfa) models. 
 
@@ -9,18 +9,27 @@ It is designed to provide high robustness against the numerical convergence issu
 * Production and cost frontiers: supports both orientations.
 * Functional forms: linear, cobb-douglas, and translog specifications. Includes support for dummy variables.
 * Cross-sectional data: standard estimation with optional inclusion of inefficiency determinants (bc95 model).
-* Panel data (time-varying): implementation of the battese & coelli (1992) model, capturing the temporal evolution of technical inefficiency.
+* Panel data (time-varying): implementation of the battese and coelli (1992) model, capturing the temporal evolution of technical inefficiency.
+* True effects (greene 2005): integration of unobserved heterogeneity separation.
 * Efficiency decomposition methods: jondrow et al. (1982), battese and coelli (1988), and a modified approach.
+
+## Mle versus pymc
+
+The library offers two distinct inference methods to adapt to your data structure and overcome traditional solver limitations.
+
+Mle (maximum likelihood estimation) is the standard frequentist approach. It is computationally fast and works well on large, balanced cross-sectional datasets. However, it frequently suffers from boundary failures (where the inefficiency variance collapses to zero) on unbalanced panels or when dealing with high ratios of singletons.
+
+Pymc (bayesian inference) is the robust alternative. By integrating prior distributions, it prevents boundary collapses and successfully separates signal from noise even when the majority of the panel consists of single observations. It provides full posterior distributions but requires more computation time.
 
 ## Installation
 
 The library can be installed directly from its git repository:
 
 ```bash
-pip install -U git+[https://github.com/ThomasLucereau/depp_SFA.git](https://github.com/ThomasLucereau/depp_SFA.git)
+pip install -U git+https://github.com/ThomasLucereau/depp_SFA.git
 ```
 
-## Usage and quick start
+## Usage and data preparation
 
 It is strongly recommended to standardize (center and scale) continuous variables prior to estimation to ensure the convergence of the optimization algorithms.
 
@@ -28,40 +37,86 @@ It is strongly recommended to standardize (center and scale) continuous variable
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from depp_SFA import SFA, FUN_COST, TE_teJ
+from depp_SFA import SFA, FUN_COST
 
-# 1. Data preparation
+# 1. data preparation
 df = pd.read_csv("data.csv")
 df = df[(df["cost"] > 0) & (df["output"] > 0)]
 
-# Standardization
+# standardization
 vars_to_scale = ["density", "quality_index"]
 scaler = StandardScaler()
 df[vars_to_scale] = scaler.fit_transform(df[vars_to_scale])
 
-# 2. Vector extraction
+# 2. vector extraction
 y = df["cost"].to_numpy(dtype=float)
 X = df[["output"] + vars_to_scale].to_numpy(dtype=float)
 firm_ids = df["firm_id"].to_numpy()
 years = df["year"].to_numpy(dtype=float)
+Z_vars = df[["contract_type", "vandalism_risk"]].to_numpy(dtype=float)
+```
 
-# 3. Model instantiation and execution (panel)
-model = SFA(
+## Implementation guide
+
+### 1. Panel data with time evolution (bc92)
+
+The battese and coelli (1992) model captures how inefficiency evolves over time using a decay parameter. It is best estimated using pymc for short or unbalanced panels.
+
+```python
+model_bc92 = SFA(
     y=y, 
     x=X, 
     id_var=firm_ids, 
     time_var=years, 
     fun=FUN_COST, 
-    method=TE_teJ, 
-    form='cobb_douglas',
-    dummy_indices=[]
+    panel_model='bc92',
+    inference_method='pymc',
+    draws=2000
 )
 
-# Display results
-model.summary()
+# display results
+model_bc92.summary()
 
-# Retrieve efficiency scores
-efficiency_scores = model.get_technical_efficiency()
+# retrieve efficiency scores
+efficiency_scores = model_bc92.get_technical_efficiency()
+```
+
+### 2. Inefficiency effects model (bc95)
+
+The battese and coelli (1995) model uses environmental variables (z) to explain why certain units are less efficient, rather than treating these variables as direct cost drivers.
+
+```python
+model_bc95 = SFA(
+    y=y, 
+    x=X, 
+    z=Z_vars,
+    fun=FUN_COST,      
+    inference_method='pymc',
+    draws=2000
+)
+
+# display results
+model_bc95.summary()
+```
+
+### 3. True random effects (greene 2005)
+
+This specification separates unobserved structural heterogeneity (specific to each firm) from pure managerial inefficiency. It prevents the model from penalizing firms for structural geographical disadvantages.
+
+```python
+model_greene = SFA(
+    y=y, 
+    x=X, 
+    id_var=firm_ids,
+    time_var=years,
+    fun=FUN_COST,
+    panel_model='greene',
+    inference_method='pymc',
+    draws=2000
+)
+
+# display results
+model_greene.summary()
 ```
 
 ## Api documentation (sfa class)
@@ -79,7 +134,7 @@ The class constructor configures the model parameters and transforms the data ac
 * fun (constant): frontier type. Use sfa.fun_prod (default) or sfa.fun_cost.
 * intercept (bool): include an intercept in the model (default: true).
 * lamda0 (float): initial value of lambda for mle optimization (default: 1).
-* method (constant): method for computing technical efficiency. Choose among sfa.te_tej (jondrow et al.), sfa.te_te (battese & coelli), or sfa.te_temod.
+* method (constant): method for computing technical efficiency. Choose among sfa.te_tej (jondrow et al.), sfa.te_te (battese and coelli), or sfa.te_temod.
 * form (str): functional form. Choose among 'linear', 'cobb_douglas', or 'translog'.
 * dummy_indices (list): list of column indices in x that are indicator variables (0/1) and should not be log-transformed.
 
@@ -100,4 +155,4 @@ Once the model is instantiated, the following methods are available. Calling any
 This software is distributed under the mit license.
 
 * The base architecture, matrix processing, and classic log-likelihood derivations are inspired by and adapted from the work of sheng dai (copyright (c) 2023, mit license).
-* The integration of bayesian estimators (markov chain monte carlo via pymc), the numerical stabilization of panel models (battese & coelli 1992), and the algorithmic exception handling were developed specifically for this project.
+* The integration of bayesian estimators (markov chain monte carlo via pymc), the numerical stabilization of panel models (battese and coelli 1992), and the algorithmic exception handling were developed specifically for this project.
