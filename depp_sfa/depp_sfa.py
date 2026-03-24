@@ -5,7 +5,6 @@ This module provides the SFA class to estimate production and cost frontiers
 using Maximum Likelihood Estimation (MLE) or Bayesian Inference (PyMC).
 """
 
-from inspect import trace
 import math
 import logging
 import warnings
@@ -16,7 +15,10 @@ from scipy.stats import norm
 from scipy.optimize import minimize
 from scipy.special import log_ndtr
 from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import StandardScaler
+from statsmodels.tools.numdiff import approx_hess
 import pymc as pm
+
 
 from . import constant
 
@@ -56,7 +58,8 @@ class SFA:
         self, y, x, z=None, id_var=None, time_var=None,
         fun=FUN_PROD, intercept=True, lamda0=1, method=TE_teJ,
         form='linear', dummy_indices=None, inference_method='mle',
-        panel_model='bc92', draws=1500, tune=1500
+        panel_model='bc92', draws=1500, tune=1500,
+        standardize=False
     ):
         """
         Initialize the SFA model.
@@ -102,6 +105,7 @@ class SFA:
         self.panel_model = panel_model.lower()
         self.draws = draws
         self.tune = tune
+        self.standardize = standardize
 
         # Set error sign based on frontier type (production = 1, cost = -1)
         self.sign = 1 if self.fun == self.FUN_PROD else -1
@@ -121,7 +125,7 @@ class SFA:
         
         # Apply functional form transformations (e.g., logs, interaction terms)
         self.y, self.x, self.x_names = self.__transform_data(
-            y_arr, x_arr, self.form, self.dummy_indices
+            y_arr, x_arr, self.form, self.dummy_indices, self.standardize
         )
 
         if self.is_panel:
@@ -188,23 +192,23 @@ class SFA:
             f"z{i+1}" for i in range(z_array.shape[1])
         ]
 
-    def __transform_data(self, y, x, form, dummy_indices):
+    def __transform_data(self, y, x, form, dummy_indices, standardize):
         """
-        Transform raw data into the specified functional form.
+        Transform raw data into the specified functional form and optionally standardize.
 
         :param y: Dependent variable array.
         :param x: Independent variables array.
         :param form: 'linear', 'cobb_douglas', or 'translog'.
-        :param dummy_indices: List of indices to exclude from log-transformation.
+        :param dummy_indices: List of indices to exclude from log-transformation and standardization.
+        :param standardize: Whether to standardize continuous variables (mean 0, variance 1).
+        :type standardize: bool
         :returns: Tuple containing transformed y, transformed x, and variable names.
         :rtype: tuple
         """
+
         x_2d = np.atleast_2d(x) if x.ndim == 1 else x
         n_obs, n_vars = x_2d.shape
         base_names = [f"x{i+1}" for i in range(n_vars)]
-
-        if form == 'linear':
-            return y, x_2d, base_names
 
         # Separate continuous variables from dummy variables
         cont_idx = [i for i in range(n_vars) if i not in dummy_indices]
@@ -212,32 +216,32 @@ class SFA:
 
         if dummy_indices:
             x_dummies = x_2d[:, dummy_indices]
+            dummy_names = [f"d_{base_names[i]}" for i in dummy_indices]
         else:
             x_dummies = np.empty((n_obs, 0))
+            dummy_names = []
 
-        # Enforce strict positivity for logarithmic transformations
-        if np.any(y <= 0) or np.any(x_cont <= 0):
-            raise ValueError(
-                "Continuous variables must be strictly positive "
-                "for log transformation."
-            )
+        # Handle transformations
+        if form in ['cobb_douglas', 'translog']:
+            # Enforce strict positivity for logarithmic transformations
+            if np.any(y <= 0) or np.any(x_cont <= 0):
+                raise ValueError(
+                    "Continuous variables must be strictly positive "
+                    "for log transformation."
+                )
+            trans_y = np.log(y)
+            trans_x_cont = np.log(x_cont)
+            cont_names = [f"ln_{base_names[i]}" for i in cont_idx]
+        else:
+            trans_y = y
+            trans_x_cont = x_cont
+            cont_names = [base_names[i] for i in cont_idx]
 
-        log_y = np.log(y)
-        log_x_cont = np.log(x_cont)
-        cont_names = [f"ln_{base_names[i]}" for i in cont_idx]
-        dummy_names = [f"d_{base_names[i]}" for i in dummy_indices]
+        final_x_cont = trans_x_cont
 
-        # Cobb-Douglas: simply log-transform continuous variables
-        if form == 'cobb_douglas':
-            if dummy_indices:
-                final_x = np.hstack((log_x_cont, x_dummies))
-            else:
-                final_x = log_x_cont
-            return log_y, final_x, cont_names + dummy_names
-
-        # Translog: include logs, squared terms, and cross-products
-        elif form == 'translog':
-            new_x_cols = [log_x_cont]
+        # Translog: include squared terms and cross-products
+        if form == 'translog':
+            new_x_cols = [trans_x_cont]
             final_names = list(cont_names)
             n_cont = len(cont_idx)
 
@@ -245,21 +249,30 @@ class SFA:
                 for j in range(i, n_cont):
                     if i == j:
                         # Squared terms: 0.5 * ln(xi)^2
-                        col = 0.5 * (log_x_cont[:, i] ** 2)
+                        col = 0.5 * (trans_x_cont[:, i] ** 2)
                         new_x_cols.append(col.reshape(-1, 1))
                         final_names.append(f"0.5*{cont_names[i]}^2")
                     else:
                         # Cross-products: ln(xi) * ln(xj)
-                        col = log_x_cont[:, i] * log_x_cont[:, j]
+                        col = trans_x_cont[:, i] * trans_x_cont[:, j]
                         new_x_cols.append(col.reshape(-1, 1))
                         final_names.append(f"{cont_names[i]}*{cont_names[j]}")
+            
+            final_x_cont = np.hstack(new_x_cols)
+            cont_names = final_names
 
-            # Re-append dummy variables at the end
-            if dummy_indices:
-                new_x_cols.append(x_dummies)
-                final_names.extend(dummy_names)
+        # Apply standardization ONLY to the continuous block
+        if standardize and final_x_cont.shape[1] > 0:
+            scaler = StandardScaler()
+            final_x_cont = scaler.fit_transform(final_x_cont)
 
-            return log_y, np.hstack(new_x_cols), final_names
+        # Re-append dummy variables at the end
+        if dummy_indices:
+            final_x = np.hstack((final_x_cont, x_dummies))
+        else:
+            final_x = final_x_cont
+
+        return trans_y, final_x, cont_names + dummy_names
 
     def optimize(self):
         """
@@ -387,12 +400,16 @@ class SFA:
         self._params = res.x
         self._llf = -res.fun
 
-        # Extract standard errors via the inverse Hessian
         try:
-            hessian = res.hess_inv.todense() if hasattr(res.hess_inv, 'todense') else res.hess_inv
-            self._std_err = np.sqrt(np.diag(hessian))
-        except (AttributeError, ValueError):
-            self._std_err = np.full_like(res.x, np.nan)
+            hess_exact = approx_hess(res.x, __loglik)
+            hess_inv_exact = np.linalg.inv(hess_exact)
+            self._std_err = np.sqrt(np.diag(hess_inv_exact))
+        except Exception:
+            try:
+                hessian_approx = res.hess_inv.todense() if hasattr(res.hess_inv, 'todense') else res.hess_inv
+                self._std_err = np.sqrt(np.diag(hessian_approx))
+            except (AttributeError, ValueError):
+                self._std_err = np.full_like(res.x, np.nan)
 
     def __optimize_mle_panel(self):
         """
@@ -476,10 +493,16 @@ class SFA:
         self._llf = -res.fun
 
         try:
-            hessian = res.hess_inv.todense() if hasattr(res.hess_inv, 'todense') else res.hess_inv
-            self._std_err = np.sqrt(np.diag(hessian))
-        except (AttributeError, ValueError):
-            self._std_err = np.full_like(res.x, np.nan)
+            hess_exact = approx_hess(res.x, bc92_ll)
+            hess_inv_exact = np.linalg.inv(hess_exact)
+            self._std_err = np.sqrt(np.diag(hess_inv_exact))
+        except Exception as e:
+            warnings.warn(f"Hessian inversion failed: {e}. Falling back to BFGS approximation.")
+            try:
+                h_approx = res.hess_inv.todense() if hasattr(res.hess_inv, 'todense') else res.hess_inv
+                self._std_err = np.sqrt(np.diag(h_approx))
+            except:
+                self._std_err = np.full_like(res.x, np.nan)
 
     def __optimize_pymc_cross(self):
         """

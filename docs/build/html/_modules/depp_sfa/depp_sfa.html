@@ -1,0 +1,992 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>depp_sfa.depp_sfa &mdash; depp_sfa 1.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../_static/documentation_options.js?v=8d563738"></script>
+      <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            depp_sfa
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <!-- Local TOC -->
+              <div class="local-toc"></div>
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">depp_sfa</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">depp_sfa.depp_sfa</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for depp_sfa.depp_sfa</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Stochastic Frontier Analysis (SFA) Module.</span>
+
+<span class="sd">This module provides the SFA class to estimate production and cost frontiers</span>
+<span class="sd">using Maximum Likelihood Estimation (MLE) or Bayesian Inference (PyMC).</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">inspect</span><span class="w"> </span><span class="kn">import</span> <span class="n">trace</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">scipy.stats</span><span class="w"> </span><span class="kn">import</span> <span class="n">norm</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">scipy.optimize</span><span class="w"> </span><span class="kn">import</span> <span class="n">minimize</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">scipy.special</span><span class="w"> </span><span class="kn">import</span> <span class="n">log_ndtr</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sklearn.linear_model</span><span class="w"> </span><span class="kn">import</span> <span class="n">LinearRegression</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pymc</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pm</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">.</span><span class="w"> </span><span class="kn">import</span> <span class="n">constant</span>
+
+<span class="c1"># Bind constants from the external module</span>
+<span class="n">FUN_COST</span> <span class="o">=</span> <span class="n">constant</span><span class="o">.</span><span class="n">FUN_COST</span>
+<span class="n">FUN_PROD</span> <span class="o">=</span> <span class="n">constant</span><span class="o">.</span><span class="n">FUN_PROD</span>
+<span class="n">TE_teJ</span> <span class="o">=</span> <span class="n">constant</span><span class="o">.</span><span class="n">TE_teJ</span>
+<span class="n">TE_te</span> <span class="o">=</span> <span class="n">constant</span><span class="o">.</span><span class="n">TE_te</span>
+<span class="n">TE_teMod</span> <span class="o">=</span> <span class="n">constant</span><span class="o">.</span><span class="n">TE_teMod</span>
+
+<span class="c1"># Mute PyMC internal logging to keep the terminal clean</span>
+<span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="s2">&quot;pymc&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">setLevel</span><span class="p">(</span><span class="n">logging</span><span class="o">.</span><span class="n">ERROR</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="SFA">
+<a class="viewcode-back" href="../../index.html#depp_sfa.SFA">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">SFA</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Stochastic Frontier Analysis (SFA) estimator.</span>
+
+<span class="sd">    This class supports Cross-sectional models (ALS77, BC95), Panel Data models (BC92), </span>
+<span class="sd">    and True Effects models (Greene 2005). It provides dual inference backends: </span>
+<span class="sd">    Frequentist (MLE) and Bayesian (MCMC via PyMC).</span>
+
+<span class="sd">    :cvar FUN_PROD: Constant indicating a production frontier.</span>
+<span class="sd">    :cvar FUN_COST: Constant indicating a cost frontier.</span>
+<span class="sd">    :cvar TE_teJ: Constant for Jondrow et al. (1982) efficiency decomposition.</span>
+<span class="sd">    :cvar TE_te: Constant for Battese &amp; Coelli (1988) efficiency decomposition.</span>
+<span class="sd">    :cvar TE_teMod: Constant for a modified efficiency decomposition.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">FUN_PROD</span> <span class="o">=</span> <span class="n">FUN_PROD</span>
+    <span class="n">FUN_COST</span> <span class="o">=</span> <span class="n">FUN_COST</span>
+    <span class="n">TE_teJ</span> <span class="o">=</span> <span class="n">TE_teJ</span>
+    <span class="n">TE_te</span> <span class="o">=</span> <span class="n">TE_te</span>
+    <span class="n">TE_teMod</span> <span class="o">=</span> <span class="n">TE_teMod</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">z</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">id_var</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">time_var</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+        <span class="n">fun</span><span class="o">=</span><span class="n">FUN_PROD</span><span class="p">,</span> <span class="n">intercept</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">lamda0</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="n">TE_teJ</span><span class="p">,</span>
+        <span class="n">form</span><span class="o">=</span><span class="s1">&#39;linear&#39;</span><span class="p">,</span> <span class="n">dummy_indices</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">inference_method</span><span class="o">=</span><span class="s1">&#39;mle&#39;</span><span class="p">,</span>
+        <span class="n">panel_model</span><span class="o">=</span><span class="s1">&#39;bc92&#39;</span><span class="p">,</span> <span class="n">draws</span><span class="o">=</span><span class="mi">1500</span><span class="p">,</span> <span class="n">tune</span><span class="o">=</span><span class="mi">1500</span>
+    <span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Initialize the SFA model.</span>
+
+<span class="sd">        :param y: Dependent variable (output or cost).</span>
+<span class="sd">        :type y: array-like, shape (n_samples,)</span>
+<span class="sd">        :param x: Independent variables (inputs).</span>
+<span class="sd">        :type x: array-like, shape (n_samples, n_features)</span>
+<span class="sd">        :param z: Inefficiency determinants for BC95 models. Defaults to None.</span>
+<span class="sd">        :type z: array-like, shape (n_samples, n_z_features), optional</span>
+<span class="sd">        :param id_var: Panel group identifier. Defaults to None.</span>
+<span class="sd">        :type id_var: array-like, shape (n_samples,), optional</span>
+<span class="sd">        :param time_var: Panel time identifier. Defaults to None.</span>
+<span class="sd">        :type time_var: array-like, shape (n_samples,), optional</span>
+<span class="sd">        :param fun: Type of frontier (FUN_PROD or FUN_COST). Defaults to FUN_PROD.</span>
+<span class="sd">        :type fun: int, optional</span>
+<span class="sd">        :param intercept: Whether to include an intercept. Defaults to True.</span>
+<span class="sd">        :type intercept: bool, optional</span>
+<span class="sd">        :param lamda0: Initial guess for lambda in MLE. Defaults to 1.</span>
+<span class="sd">        :type lamda0: float, optional</span>
+<span class="sd">        :param method: Efficiency decomposition method. Defaults to TE_teJ.</span>
+<span class="sd">        :type method: int, optional</span>
+<span class="sd">        :param form: Functional form (&#39;linear&#39;, &#39;cobb_douglas&#39;, &#39;translog&#39;). Defaults to &#39;linear&#39;.</span>
+<span class="sd">        :type form: str, optional</span>
+<span class="sd">        :param dummy_indices: Column indices in `x` to treat as dummy variables (no log transform). Defaults to None.</span>
+<span class="sd">        :type dummy_indices: list of int, optional</span>
+<span class="sd">        :param inference_method: &#39;mle&#39; or &#39;pymc&#39;. Defaults to &#39;mle&#39;.</span>
+<span class="sd">        :type inference_method: str, optional</span>
+<span class="sd">        :param panel_model: &#39;bc92&#39; or &#39;greene&#39;. Defaults to &#39;bc92&#39;.</span>
+<span class="sd">        :type panel_model: str, optional</span>
+<span class="sd">        :param draws: Number of MCMC draws for PyMC. Defaults to 1500.</span>
+<span class="sd">        :type draws: int, optional</span>
+<span class="sd">        :param tune: Number of tuning steps for PyMC. Defaults to 1500.</span>
+<span class="sd">        :type tune: int, optional</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">fun</span> <span class="o">=</span> <span class="n">fun</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">intercept</span> <span class="o">=</span> <span class="n">intercept</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">lamda0</span> <span class="o">=</span> <span class="n">lamda0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">method</span> <span class="o">=</span> <span class="n">method</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">form</span> <span class="o">=</span> <span class="n">form</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dummy_indices</span> <span class="o">=</span> <span class="n">dummy_indices</span> <span class="k">if</span> <span class="n">dummy_indices</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">inference_method</span> <span class="o">=</span> <span class="n">inference_method</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">panel_model</span> <span class="o">=</span> <span class="n">panel_model</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">draws</span> <span class="o">=</span> <span class="n">draws</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">tune</span> <span class="o">=</span> <span class="n">tune</span>
+
+        <span class="c1"># Set error sign based on frontier type (production = 1, cost = -1)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sign</span> <span class="o">=</span> <span class="mi">1</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">fun</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">FUN_PROD</span> <span class="k">else</span> <span class="o">-</span><span class="mi">1</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">is_panel</span> <span class="o">=</span> <span class="p">(</span><span class="n">id_var</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">)</span> <span class="ow">and</span> <span class="p">(</span><span class="n">time_var</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">has_z</span> <span class="o">=</span> <span class="n">z</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_panel</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">has_z</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;This class does not support combining &quot;</span>
+                <span class="s2">&quot;Z variables (BC95) with Panel data.&quot;</span>
+            <span class="p">)</span>
+
+        <span class="c1"># Convert inputs to numpy arrays</span>
+        <span class="n">y_arr</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">float</span><span class="p">)</span>
+        <span class="n">x_arr</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">float</span><span class="p">)</span>
+        
+        <span class="c1"># Apply functional form transformations (e.g., logs, interaction terms)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">y</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">x_names</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">__transform_data</span><span class="p">(</span>
+            <span class="n">y_arr</span><span class="p">,</span> <span class="n">x_arr</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">form</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dummy_indices</span>
+        <span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_panel</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_setup_panel</span><span class="p">(</span><span class="n">id_var</span><span class="p">,</span> <span class="n">time_var</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">has_z</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_setup_z</span><span class="p">(</span><span class="n">z</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">z</span> <span class="o">=</span> <span class="kc">None</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">z_names</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="c1"># Internal state tracking</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">is_fitted</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">estimation_method</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_params</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_std_err</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_llf</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">pymc_trace</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_setup_panel</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">id_var</span><span class="p">,</span> <span class="n">time_var</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Process panel data identifiers and compute maximum time per firm.</span>
+
+<span class="sd">        :param id_var: Array of firm/group identifiers.</span>
+<span class="sd">        :param time_var: Array of time periods.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">id_var</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">id_var</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">time_array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">time_var</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">float</span><span class="p">)</span>
+
+        <span class="c1"># Create mapping from unique ID to integer index</span>
+        <span class="n">unique_ids</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">id_var</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_firms</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">unique_ids</span><span class="p">)</span>
+        <span class="n">id_map</span> <span class="o">=</span> <span class="p">{</span><span class="n">val</span><span class="p">:</span> <span class="n">i</span> <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">val</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">unique_ids</span><span class="p">)}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">firm_idx</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">id_map</span><span class="p">[</span><span class="n">val</span><span class="p">]</span> <span class="k">for</span> <span class="n">val</span> <span class="ow">in</span> <span class="n">id_var</span><span class="p">])</span>
+
+        <span class="c1"># Compute max time observed for each firm (required for BC92 decay function)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">T_max_per_firm</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_firms</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_firms</span><span class="p">):</span>
+            <span class="n">mask</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">firm_idx</span> <span class="o">==</span> <span class="n">i</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">T_max_per_firm</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">time_array</span><span class="p">[</span><span class="n">mask</span><span class="p">])</span>
+
+        <span class="c1"># === GREENE 2005 (TFE) ===</span>
+        <span class="c1"># If MLE True Fixed Effects, append firm dummies directly to the X matrix</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">panel_model</span> <span class="o">==</span> <span class="s1">&#39;greene&#39;</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_method</span> <span class="o">==</span> <span class="s1">&#39;mle&#39;</span><span class="p">:</span>
+            <span class="n">firm_dummies</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">get_dummies</span><span class="p">(</span><span class="n">id_var</span><span class="p">,</span> <span class="n">drop_first</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span><span class="o">.</span><span class="n">values</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">hstack</span><span class="p">((</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">,</span> <span class="n">firm_dummies</span><span class="p">))</span>
+            <span class="n">dummy_names</span> <span class="o">=</span> <span class="p">[</span><span class="sa">f</span><span class="s2">&quot;Firme_</span><span class="si">{</span><span class="n">uid</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">for</span> <span class="n">uid</span> <span class="ow">in</span> <span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">id_var</span><span class="p">)[</span><span class="mi">1</span><span class="p">:]]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">x_names</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">dummy_names</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_setup_z</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">z</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Process environmental/inefficiency variables (Z) for BC95 models.</span>
+
+<span class="sd">        :param z: Array of Z variables.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">z_array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">z</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">float</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">z_array</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="n">z_array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">atleast_2d</span><span class="p">(</span><span class="n">z_array</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">z_array</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">y</span><span class="p">):</span>
+            <span class="n">z_array</span> <span class="o">=</span> <span class="n">z_array</span><span class="o">.</span><span class="n">T</span>
+
+        <span class="c1"># Prepend a column of ones for the Z-equation intercept (delta_0)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">z</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">hstack</span><span class="p">((</span><span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">((</span><span class="n">z_array</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">1</span><span class="p">)),</span> <span class="n">z_array</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">z_names</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;delta_0&#39;</span><span class="p">]</span> <span class="o">+</span> <span class="p">[</span>
+            <span class="sa">f</span><span class="s2">&quot;z</span><span class="si">{</span><span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">z_array</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+        <span class="p">]</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">__transform_data</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">form</span><span class="p">,</span> <span class="n">dummy_indices</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Transform raw data into the specified functional form.</span>
+
+<span class="sd">        :param y: Dependent variable array.</span>
+<span class="sd">        :param x: Independent variables array.</span>
+<span class="sd">        :param form: &#39;linear&#39;, &#39;cobb_douglas&#39;, or &#39;translog&#39;.</span>
+<span class="sd">        :param dummy_indices: List of indices to exclude from log-transformation.</span>
+<span class="sd">        :returns: Tuple containing transformed y, transformed x, and variable names.</span>
+<span class="sd">        :rtype: tuple</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">x_2d</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">atleast_2d</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">1</span> <span class="k">else</span> <span class="n">x</span>
+        <span class="n">n_obs</span><span class="p">,</span> <span class="n">n_vars</span> <span class="o">=</span> <span class="n">x_2d</span><span class="o">.</span><span class="n">shape</span>
+        <span class="n">base_names</span> <span class="o">=</span> <span class="p">[</span><span class="sa">f</span><span class="s2">&quot;x</span><span class="si">{</span><span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_vars</span><span class="p">)]</span>
+
+        <span class="k">if</span> <span class="n">form</span> <span class="o">==</span> <span class="s1">&#39;linear&#39;</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">y</span><span class="p">,</span> <span class="n">x_2d</span><span class="p">,</span> <span class="n">base_names</span>
+
+        <span class="c1"># Separate continuous variables from dummy variables</span>
+        <span class="n">cont_idx</span> <span class="o">=</span> <span class="p">[</span><span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_vars</span><span class="p">)</span> <span class="k">if</span> <span class="n">i</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">dummy_indices</span><span class="p">]</span>
+        <span class="n">x_cont</span> <span class="o">=</span> <span class="n">x_2d</span><span class="p">[:,</span> <span class="n">cont_idx</span><span class="p">]</span>
+
+        <span class="k">if</span> <span class="n">dummy_indices</span><span class="p">:</span>
+            <span class="n">x_dummies</span> <span class="o">=</span> <span class="n">x_2d</span><span class="p">[:,</span> <span class="n">dummy_indices</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">x_dummies</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">n_obs</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span>
+
+        <span class="c1"># Enforce strict positivity for logarithmic transformations</span>
+        <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="n">y</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">)</span> <span class="ow">or</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="n">x_cont</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;Continuous variables must be strictly positive &quot;</span>
+                <span class="s2">&quot;for log transformation.&quot;</span>
+            <span class="p">)</span>
+
+        <span class="n">log_y</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">y</span><span class="p">)</span>
+        <span class="n">log_x_cont</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">x_cont</span><span class="p">)</span>
+        <span class="n">cont_names</span> <span class="o">=</span> <span class="p">[</span><span class="sa">f</span><span class="s2">&quot;ln_</span><span class="si">{</span><span class="n">base_names</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">cont_idx</span><span class="p">]</span>
+        <span class="n">dummy_names</span> <span class="o">=</span> <span class="p">[</span><span class="sa">f</span><span class="s2">&quot;d_</span><span class="si">{</span><span class="n">base_names</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">dummy_indices</span><span class="p">]</span>
+
+        <span class="c1"># Cobb-Douglas: simply log-transform continuous variables</span>
+        <span class="k">if</span> <span class="n">form</span> <span class="o">==</span> <span class="s1">&#39;cobb_douglas&#39;</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">dummy_indices</span><span class="p">:</span>
+                <span class="n">final_x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">hstack</span><span class="p">((</span><span class="n">log_x_cont</span><span class="p">,</span> <span class="n">x_dummies</span><span class="p">))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">final_x</span> <span class="o">=</span> <span class="n">log_x_cont</span>
+            <span class="k">return</span> <span class="n">log_y</span><span class="p">,</span> <span class="n">final_x</span><span class="p">,</span> <span class="n">cont_names</span> <span class="o">+</span> <span class="n">dummy_names</span>
+
+        <span class="c1"># Translog: include logs, squared terms, and cross-products</span>
+        <span class="k">elif</span> <span class="n">form</span> <span class="o">==</span> <span class="s1">&#39;translog&#39;</span><span class="p">:</span>
+            <span class="n">new_x_cols</span> <span class="o">=</span> <span class="p">[</span><span class="n">log_x_cont</span><span class="p">]</span>
+            <span class="n">final_names</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">cont_names</span><span class="p">)</span>
+            <span class="n">n_cont</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">cont_idx</span><span class="p">)</span>
+
+            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_cont</span><span class="p">):</span>
+                <span class="k">for</span> <span class="n">j</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="n">n_cont</span><span class="p">):</span>
+                    <span class="k">if</span> <span class="n">i</span> <span class="o">==</span> <span class="n">j</span><span class="p">:</span>
+                        <span class="c1"># Squared terms: 0.5 * ln(xi)^2</span>
+                        <span class="n">col</span> <span class="o">=</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">log_x_cont</span><span class="p">[:,</span> <span class="n">i</span><span class="p">]</span> <span class="o">**</span> <span class="mi">2</span><span class="p">)</span>
+                        <span class="n">new_x_cols</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">col</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+                        <span class="n">final_names</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;0.5*</span><span class="si">{</span><span class="n">cont_names</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="si">}</span><span class="s2">^2&quot;</span><span class="p">)</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="c1"># Cross-products: ln(xi) * ln(xj)</span>
+                        <span class="n">col</span> <span class="o">=</span> <span class="n">log_x_cont</span><span class="p">[:,</span> <span class="n">i</span><span class="p">]</span> <span class="o">*</span> <span class="n">log_x_cont</span><span class="p">[:,</span> <span class="n">j</span><span class="p">]</span>
+                        <span class="n">new_x_cols</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">col</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+                        <span class="n">final_names</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">cont_names</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="si">}</span><span class="s2">*</span><span class="si">{</span><span class="n">cont_names</span><span class="p">[</span><span class="n">j</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+            <span class="c1"># Re-append dummy variables at the end</span>
+            <span class="k">if</span> <span class="n">dummy_indices</span><span class="p">:</span>
+                <span class="n">new_x_cols</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">x_dummies</span><span class="p">)</span>
+                <span class="n">final_names</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">dummy_names</span><span class="p">)</span>
+
+            <span class="k">return</span> <span class="n">log_y</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">hstack</span><span class="p">(</span><span class="n">new_x_cols</span><span class="p">),</span> <span class="n">final_names</span>
+
+<div class="viewcode-block" id="SFA.optimize">
+<a class="viewcode-back" href="../../index.html#depp_sfa.SFA.optimize">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">optimize</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Main estimation router.</span>
+<span class="sd">        </span>
+<span class="sd">        Checks if the model is already fitted. If not, it routes the estimation</span>
+<span class="sd">        to the appropriate MLE or PyMC private method based on user configuration.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_fitted</span><span class="p">:</span> <span class="k">return</span>
+        <span class="k">with</span> <span class="n">warnings</span><span class="o">.</span><span class="n">catch_warnings</span><span class="p">():</span>
+            <span class="n">warnings</span><span class="o">.</span><span class="n">simplefilter</span><span class="p">(</span><span class="s2">&quot;ignore&quot;</span><span class="p">)</span>
+
+            <span class="c1"># === BRANCHE MLE ===</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_method</span> <span class="o">==</span> <span class="s1">&#39;mle&#39;</span><span class="p">:</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_panel</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">panel_model</span> <span class="o">==</span> <span class="s1">&#39;greene&#39;</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">__optimize_mle</span><span class="p">()</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">estimation_method</span> <span class="o">=</span> <span class="s1">&#39;MLE (Greene 2005 TFE)&#39;</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">__optimize_mle_panel</span><span class="p">()</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">estimation_method</span> <span class="o">=</span> <span class="s1">&#39;MLE (Panel BC92)&#39;</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">__optimize_mle</span><span class="p">()</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">estimation_method</span> <span class="o">=</span> <span class="s1">&#39;MLE (BC95 Inefficiency Effects)&#39;</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">has_z</span> <span class="k">else</span> <span class="s1">&#39;MLE (Cross-sectional)&#39;</span>
+
+            <span class="c1"># === BRANCHE PyMC ===</span>
+            <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_method</span> <span class="o">==</span> <span class="s1">&#39;pymc&#39;</span><span class="p">:</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_panel</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">panel_model</span> <span class="o">==</span> <span class="s1">&#39;greene&#39;</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">__optimize_pymc_greene_tre</span><span class="p">()</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">estimation_method</span> <span class="o">=</span> <span class="s1">&#39;PyMC (Greene 2005 TRE)&#39;</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">__optimize_pymc_panel</span><span class="p">()</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">estimation_method</span> <span class="o">=</span> <span class="s1">&#39;PyMC (Panel BC92)&#39;</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">__optimize_pymc_cross</span><span class="p">()</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">estimation_method</span> <span class="o">=</span> <span class="s1">&#39;PyMC (BC95 Inefficiency Effects)&#39;</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">has_z</span> <span class="k">else</span> <span class="s1">&#39;PyMC (Cross-sectional)&#39;</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">is_fitted</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">__optimize_mle</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Maximum Likelihood Estimation for Cross-sectional, Z-models &amp; TFE.</span>
+<span class="sd">        </span>
+<span class="sd">        Uses OLS to generate starting values, then constructs and minimizes </span>
+<span class="sd">        the negative log-likelihood function using the L-BFGS-B algorithm.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># OLS Initialization</span>
+        <span class="n">reg</span> <span class="o">=</span> <span class="n">LinearRegression</span><span class="p">(</span><span class="n">fit_intercept</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">intercept</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">X</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">y</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">intercept</span><span class="p">:</span>
+            <span class="n">beta_init</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(([</span><span class="n">reg</span><span class="o">.</span><span class="n">intercept_</span><span class="p">],</span> <span class="n">reg</span><span class="o">.</span><span class="n">coef_</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">beta_init</span> <span class="o">=</span> <span class="n">reg</span><span class="o">.</span><span class="n">coef_</span>
+
+        <span class="n">K</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">beta_init</span><span class="p">)</span>
+        <span class="n">N</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">)</span>
+
+        <span class="n">y_pred_init</span> <span class="o">=</span> <span class="n">reg</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">resid_var</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">var</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">y</span> <span class="o">-</span> <span class="n">y_pred_init</span><span class="p">)</span>
+
+        <span class="c1"># Setup initial parameters</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">has_z</span><span class="p">:</span>
+            <span class="n">delta_init</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">z</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+            <span class="n">parm</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">((</span><span class="n">beta_init</span><span class="p">,</span> <span class="n">delta_init</span><span class="p">,</span> <span class="p">[</span><span class="n">resid_var</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">]))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">lam0</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">lamda0</span>
+            <span class="n">gamma_init</span> <span class="o">=</span> <span class="p">(</span><span class="n">lam0</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1</span> <span class="o">+</span> <span class="n">lam0</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
+            <span class="n">parm</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">((</span><span class="n">beta_init</span><span class="p">,</span> <span class="p">[</span><span class="n">resid_var</span><span class="p">,</span> <span class="n">gamma_init</span><span class="p">]))</span>
+
+        <span class="k">def</span><span class="w"> </span><span class="nf">__loglik</span><span class="p">(</span><span class="n">p</span><span class="p">):</span>
+            <span class="c1"># Standard Cross-sectional Likelihood</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">has_z</span><span class="p">:</span>
+                <span class="n">beta</span> <span class="o">=</span> <span class="n">p</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="n">K</span><span class="p">]</span>
+                <span class="n">sigma2</span><span class="p">,</span> <span class="n">gamma</span> <span class="o">=</span> <span class="n">p</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">],</span> <span class="n">p</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+
+                <span class="k">if</span> <span class="n">sigma2</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">gamma</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">gamma</span> <span class="o">&gt;=</span> <span class="mf">0.9999</span><span class="p">:</span>
+                    <span class="k">return</span> <span class="mf">1e15</span>
+
+                <span class="n">y_pred</span> <span class="o">=</span> <span class="n">beta</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">+</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">,</span> <span class="n">beta</span><span class="p">[</span><span class="mi">1</span><span class="p">:])</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">intercept</span> <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">,</span> <span class="n">beta</span><span class="p">)</span>
+                <span class="n">res</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">y</span> <span class="o">-</span> <span class="n">y_pred</span>
+                <span class="n">lam</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">gamma</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">gamma</span><span class="p">))</span>
+                
+                <span class="n">ll</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="o">-</span><span class="mf">0.5</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">math</span><span class="o">.</span><span class="n">pi</span><span class="p">)</span> 
+                    <span class="o">-</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">sigma2</span><span class="p">)</span>
+                    <span class="o">+</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">log_ndtr</span><span class="p">(</span><span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">sign</span> <span class="o">*</span> <span class="n">res</span> <span class="o">*</span> <span class="n">lam</span> <span class="o">/</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">sigma2</span><span class="p">)))</span>
+                    <span class="o">-</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">res</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span> <span class="o">/</span> <span class="n">sigma2</span>
+                <span class="p">)</span>
+                <span class="k">return</span> <span class="o">-</span><span class="n">ll</span>
+            <span class="c1"># BC95 Z-Variables Likelihood</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">beta</span> <span class="o">=</span> <span class="n">p</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="n">K</span><span class="p">]</span>
+                <span class="n">delta</span> <span class="o">=</span> <span class="n">p</span><span class="p">[</span><span class="n">K</span> <span class="p">:</span> <span class="n">K</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">z</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]]</span>
+                <span class="n">sigma2</span><span class="p">,</span> <span class="n">gamma</span> <span class="o">=</span> <span class="n">p</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">],</span> <span class="n">p</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+
+                <span class="k">if</span> <span class="n">sigma2</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">gamma</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">gamma</span> <span class="o">&gt;=</span> <span class="mf">0.9999</span><span class="p">:</span>
+                    <span class="k">return</span> <span class="mf">1e15</span>
+
+                <span class="n">y_pred</span> <span class="o">=</span> <span class="n">beta</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">+</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">,</span> <span class="n">beta</span><span class="p">[</span><span class="mi">1</span><span class="p">:])</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">intercept</span> <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">,</span> <span class="n">beta</span><span class="p">)</span>
+                <span class="n">eps</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sign</span> <span class="o">*</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">y</span> <span class="o">-</span> <span class="n">y_pred</span><span class="p">)</span>
+                <span class="n">mu</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">z</span><span class="p">,</span> <span class="n">delta</span><span class="p">)</span>
+
+                <span class="n">sigma_star</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">gamma</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">gamma</span><span class="p">)</span> <span class="o">*</span> <span class="n">sigma2</span><span class="p">)</span>
+                <span class="n">mu_star</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">gamma</span><span class="p">)</span> <span class="o">*</span> <span class="n">mu</span> <span class="o">-</span> <span class="n">gamma</span> <span class="o">*</span> <span class="n">eps</span>
+
+                <span class="n">ll</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="o">-</span><span class="mf">0.5</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">sigma2</span><span class="p">)</span>
+                    <span class="o">-</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">((</span><span class="n">eps</span> <span class="o">+</span> <span class="n">mu</span><span class="p">)</span><span class="o">**</span><span class="mi">2</span> <span class="o">/</span> <span class="n">sigma2</span><span class="p">)</span>
+                    <span class="o">+</span> <span class="n">log_ndtr</span><span class="p">(</span><span class="n">mu_star</span> <span class="o">/</span> <span class="n">sigma_star</span><span class="p">)</span>
+                    <span class="o">-</span> <span class="n">log_ndtr</span><span class="p">(</span><span class="n">mu</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">gamma</span> <span class="o">*</span> <span class="n">sigma2</span><span class="p">))</span>
+                <span class="p">)</span>
+                <span class="k">return</span> <span class="o">-</span><span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">ll</span><span class="p">)</span>
+
+        <span class="n">method</span> <span class="o">=</span> <span class="s1">&#39;L-BFGS-B&#39;</span>
+
+        <span class="c1"># Set bounds: gamma must be strictly between 0 and 1, sigma2 must be positive</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">has_z</span><span class="p">:</span>
+            <span class="n">bounds</span> <span class="o">=</span> <span class="p">([(</span><span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">)]</span> <span class="o">*</span> <span class="n">K</span> <span class="o">+</span> <span class="p">[(</span><span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">)]</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">z</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="p">[(</span><span class="mf">1e-6</span><span class="p">,</span> <span class="kc">None</span><span class="p">),</span> <span class="p">(</span><span class="mf">1e-6</span><span class="p">,</span> <span class="mf">0.9999</span><span class="p">)])</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">bounds</span> <span class="o">=</span> <span class="p">([(</span><span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">)]</span> <span class="o">*</span> <span class="n">K</span> <span class="o">+</span> <span class="p">[(</span><span class="mf">1e-6</span><span class="p">,</span> <span class="kc">None</span><span class="p">),</span> <span class="p">(</span><span class="mf">1e-6</span><span class="p">,</span> <span class="mf">0.9999</span><span class="p">)])</span>
+
+        <span class="n">res</span> <span class="o">=</span> <span class="n">minimize</span><span class="p">(</span><span class="n">__loglik</span><span class="p">,</span> <span class="n">parm</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="n">method</span><span class="p">,</span> <span class="n">bounds</span><span class="o">=</span><span class="n">bounds</span><span class="p">)</span>
+        
+        <span class="bp">self</span><span class="o">.</span><span class="n">_params</span> <span class="o">=</span> <span class="n">res</span><span class="o">.</span><span class="n">x</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_llf</span> <span class="o">=</span> <span class="o">-</span><span class="n">res</span><span class="o">.</span><span class="n">fun</span>
+
+        <span class="c1"># Extract standard errors via the inverse Hessian</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">hessian</span> <span class="o">=</span> <span class="n">res</span><span class="o">.</span><span class="n">hess_inv</span><span class="o">.</span><span class="n">todense</span><span class="p">()</span> <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">res</span><span class="o">.</span><span class="n">hess_inv</span><span class="p">,</span> <span class="s1">&#39;todense&#39;</span><span class="p">)</span> <span class="k">else</span> <span class="n">res</span><span class="o">.</span><span class="n">hess_inv</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_std_err</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">diag</span><span class="p">(</span><span class="n">hessian</span><span class="p">))</span>
+        <span class="k">except</span> <span class="p">(</span><span class="ne">AttributeError</span><span class="p">,</span> <span class="ne">ValueError</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_std_err</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">full_like</span><span class="p">(</span><span class="n">res</span><span class="o">.</span><span class="n">x</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">__optimize_mle_panel</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Frequentist MLE for BC92 (Time-Varying Panel Data).</span>
+<span class="sd">        </span>
+<span class="sd">        Estimates a global decay parameter (eta) that models the temporal </span>
+<span class="sd">        evolution of inefficiency.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">x_mat</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">hstack</span><span class="p">([</span><span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">((</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">1</span><span class="p">)),</span> <span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">])</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">intercept</span> <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">x</span>
+
+        <span class="n">reg</span> <span class="o">=</span> <span class="n">LinearRegression</span><span class="p">(</span><span class="n">fit_intercept</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">x_mat</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">y</span><span class="p">)</span>
+        <span class="n">y_pred</span> <span class="o">=</span> <span class="n">reg</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">x_mat</span><span class="p">)</span>
+        <span class="n">resid_var</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">var</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">y</span> <span class="o">-</span> <span class="n">y_pred</span><span class="p">)</span>
+        <span class="n">beta_ols</span> <span class="o">=</span> <span class="n">reg</span><span class="o">.</span><span class="n">coef_</span>
+
+        <span class="k">def</span><span class="w"> </span><span class="nf">bc92_ll</span><span class="p">(</span><span class="n">params</span><span class="p">):</span>
+            <span class="n">num_k</span> <span class="o">=</span> <span class="n">x_mat</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+            <span class="n">beta</span> <span class="o">=</span> <span class="n">params</span><span class="p">[:</span><span class="n">num_k</span><span class="p">]</span>
+            <span class="n">eta</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="n">num_k</span><span class="p">]</span>
+            <span class="n">sig2</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="n">num_k</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span>
+            <span class="n">gamma</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="n">num_k</span> <span class="o">+</span> <span class="mi">2</span><span class="p">]</span>
+
+            <span class="n">mu</span> <span class="o">=</span> <span class="mf">0.0</span>  
+
+            <span class="k">if</span> <span class="n">sig2</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">gamma</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">gamma</span> <span class="o">&gt;=</span> <span class="mf">0.9999</span><span class="p">:</span>
+                <span class="k">return</span> <span class="mf">1e15</span>
+
+            <span class="n">epsilon</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">y</span> <span class="o">-</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">x_mat</span><span class="p">,</span> <span class="n">beta</span><span class="p">)</span>
+            
+            <span class="c1"># BC92 Time decay function: f_it = exp(-eta * (t - T_i))</span>
+            <span class="n">t_diff</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">time_array</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">T_max_per_firm</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">firm_idx</span><span class="p">]</span>
+            <span class="n">f_it</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="o">-</span><span class="n">eta</span> <span class="o">*</span> <span class="n">t_diff</span><span class="p">)</span>
+
+            <span class="n">sig_u2</span> <span class="o">=</span> <span class="n">gamma</span> <span class="o">*</span> <span class="n">sig2</span>
+            <span class="n">sig_v2</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">gamma</span><span class="p">)</span> <span class="o">*</span> <span class="n">sig2</span>
+            <span class="n">total_ll</span> <span class="o">=</span> <span class="mi">0</span>
+
+            <span class="c1"># Sum log-likelihood over each firm i</span>
+            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_firms</span><span class="p">):</span>
+                <span class="n">mask</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">firm_idx</span> <span class="o">==</span> <span class="n">i</span>
+                <span class="n">eps_i</span><span class="p">,</span> <span class="n">f_i</span> <span class="o">=</span> <span class="n">epsilon</span><span class="p">[</span><span class="n">mask</span><span class="p">],</span> <span class="n">f_it</span><span class="p">[</span><span class="n">mask</span><span class="p">]</span>
+                <span class="n">num_ti</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">eps_i</span><span class="p">)</span>
+
+                <span class="n">sum_f2</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">f_i</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
+                <span class="n">sum_f_eps</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">f_i</span> <span class="o">*</span> <span class="n">eps_i</span><span class="p">)</span>
+
+                <span class="n">di_term</span> <span class="o">=</span> <span class="mi">1</span> <span class="o">+</span> <span class="p">(</span><span class="n">sig_u2</span> <span class="o">/</span> <span class="n">sig_v2</span><span class="p">)</span> <span class="o">*</span> <span class="n">sum_f2</span>
+
+                <span class="n">mu_star</span> <span class="o">=</span> <span class="p">((</span><span class="n">mu</span> <span class="o">*</span> <span class="n">sig_v2</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">sign</span> <span class="o">*</span> <span class="n">sig_u2</span> <span class="o">*</span> <span class="n">sum_f_eps</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="n">sig_v2</span> <span class="o">+</span> <span class="n">sig_u2</span> <span class="o">*</span> <span class="n">sum_f2</span><span class="p">))</span>
+                <span class="n">sig_star</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">((</span><span class="n">sig_u2</span> <span class="o">*</span> <span class="n">sig_v2</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="n">sig_v2</span> <span class="o">+</span> <span class="n">sig_u2</span> <span class="o">*</span> <span class="n">sum_f2</span><span class="p">))</span>
+
+                <span class="n">ll_i</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="o">-</span><span class="mf">0.5</span> <span class="o">*</span> <span class="n">num_ti</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">sig_v2</span><span class="p">)</span>
+                    <span class="o">-</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">eps_i</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span> <span class="o">/</span> <span class="n">sig_v2</span><span class="p">)</span>
+                    <span class="o">-</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">mu</span><span class="o">**</span><span class="mi">2</span> <span class="o">/</span> <span class="n">sig_u2</span><span class="p">)</span>
+                    <span class="o">+</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">mu_star</span><span class="o">**</span><span class="mi">2</span> <span class="o">/</span> <span class="n">sig_star</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
+                    <span class="o">+</span> <span class="n">log_ndtr</span><span class="p">(</span><span class="n">mu_star</span> <span class="o">/</span> <span class="n">sig_star</span><span class="p">)</span>
+                    <span class="o">-</span> <span class="n">log_ndtr</span><span class="p">(</span><span class="n">mu</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">sig_u2</span><span class="p">))</span>
+                    <span class="o">-</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">di_term</span><span class="p">)</span>
+                <span class="p">)</span>
+                <span class="n">total_ll</span> <span class="o">+=</span> <span class="n">ll_i</span>
+
+            <span class="k">return</span> <span class="o">-</span><span class="n">total_ll</span>
+
+        <span class="c1"># Grid search over gamma and eta to find robust starting values</span>
+        <span class="n">best_ll</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="s1">&#39;inf&#39;</span><span class="p">)</span>
+        <span class="n">best_start</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="k">for</span> <span class="n">g_test</span> <span class="ow">in</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.9</span><span class="p">,</span> <span class="mi">9</span><span class="p">):</span>
+            <span class="k">for</span> <span class="n">e_test</span> <span class="ow">in</span> <span class="p">[</span><span class="o">-</span><span class="mf">0.05</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.05</span><span class="p">]:</span>
+                <span class="n">test_params</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">beta_ols</span><span class="p">,</span> <span class="p">[</span><span class="n">e_test</span><span class="p">,</span> <span class="n">resid_var</span><span class="p">,</span> <span class="n">g_test</span><span class="p">]])</span>
+                <span class="n">current_ll</span> <span class="o">=</span> <span class="n">bc92_ll</span><span class="p">(</span><span class="n">test_params</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">current_ll</span> <span class="o">&lt;</span> <span class="n">best_ll</span><span class="p">:</span>
+                    <span class="n">best_ll</span> <span class="o">=</span> <span class="n">current_ll</span>
+                    <span class="n">best_start</span> <span class="o">=</span> <span class="n">test_params</span>
+
+        <span class="n">bounds</span> <span class="o">=</span> <span class="p">([(</span><span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">)]</span> <span class="o">*</span> <span class="n">x_mat</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="p">[(</span><span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">),</span> <span class="p">(</span><span class="mf">1e-6</span><span class="p">,</span> <span class="kc">None</span><span class="p">),</span> <span class="p">(</span><span class="mf">1e-6</span><span class="p">,</span> <span class="mf">0.9999</span><span class="p">)])</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="n">minimize</span><span class="p">(</span><span class="n">bc92_ll</span><span class="p">,</span> <span class="n">best_start</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s1">&#39;L-BFGS-B&#39;</span><span class="p">,</span> <span class="n">bounds</span><span class="o">=</span><span class="n">bounds</span><span class="p">,</span> <span class="n">options</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;ftol&#39;</span><span class="p">:</span> <span class="mf">1e-12</span><span class="p">,</span> <span class="s1">&#39;gtol&#39;</span><span class="p">:</span> <span class="mf">1e-8</span><span class="p">})</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_params</span> <span class="o">=</span> <span class="n">res</span><span class="o">.</span><span class="n">x</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_llf</span> <span class="o">=</span> <span class="o">-</span><span class="n">res</span><span class="o">.</span><span class="n">fun</span>
+
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">hessian</span> <span class="o">=</span> <span class="n">res</span><span class="o">.</span><span class="n">hess_inv</span><span class="o">.</span><span class="n">todense</span><span class="p">()</span> <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">res</span><span class="o">.</span><span class="n">hess_inv</span><span class="p">,</span> <span class="s1">&#39;todense&#39;</span><span class="p">)</span> <span class="k">else</span> <span class="n">res</span><span class="o">.</span><span class="n">hess_inv</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_std_err</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">diag</span><span class="p">(</span><span class="n">hessian</span><span class="p">))</span>
+        <span class="k">except</span> <span class="p">(</span><span class="ne">AttributeError</span><span class="p">,</span> <span class="ne">ValueError</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_std_err</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">full_like</span><span class="p">(</span><span class="n">res</span><span class="o">.</span><span class="n">x</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">__optimize_pymc_cross</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Bayesian Estimation via PyMC for Cross-sectional &amp; BC95 Models.</span>
+<span class="sd">        </span>
+<span class="sd">        Uses uninformative/weakly informative priors to define the Bayesian network.</span>
+<span class="sd">        Samples from the posterior distribution using NUTS (No-U-Turn Sampler).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">with</span> <span class="n">pm</span><span class="o">.</span><span class="n">Model</span><span class="p">()</span> <span class="k">as</span> <span class="n">model</span><span class="p">:</span>
+            <span class="c1"># Priors for the frontier parameters</span>
+            <span class="n">beta</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s1">&#39;beta&#39;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">intercept</span><span class="p">:</span>
+                <span class="n">beta0</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s1">&#39;beta0&#39;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+                <span class="n">mu_y</span> <span class="o">=</span> <span class="n">beta0</span> <span class="o">+</span> <span class="n">pm</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">,</span> <span class="n">beta</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">mu_y</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">,</span> <span class="n">beta</span><span class="p">)</span>
+
+            <span class="c1"># Priors for error variances</span>
+            <span class="n">sigma_v</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s1">&#39;sigma_v&#39;</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+            <span class="n">sigma_u</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s1">&#39;sigma_u&#39;</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+
+            <span class="c1"># Define inefficiency distribution (U)</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">has_z</span><span class="p">:</span>
+                <span class="n">delta</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s1">&#39;delta&#39;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">z</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+                <span class="n">mu_u</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">z</span><span class="p">,</span> <span class="n">delta</span><span class="p">)</span>
+                <span class="n">U</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">TruncatedNormal</span><span class="p">(</span><span class="s1">&#39;U&#39;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="n">mu_u</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="n">sigma_u</span><span class="p">,</span> <span class="n">lower</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">U</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s1">&#39;U&#39;</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="n">sigma_u</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+
+            <span class="c1"># Deterministic calculation of Technical Efficiency</span>
+            <span class="n">pm</span><span class="o">.</span><span class="n">Deterministic</span><span class="p">(</span><span class="s1">&#39;TE&#39;</span><span class="p">,</span> <span class="n">pm</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="o">-</span><span class="n">U</span><span class="p">))</span>
+
+            <span class="c1"># Compose final error term based on frontier orientation</span>
+            <span class="n">mu_final</span> <span class="o">=</span> <span class="n">mu_y</span> <span class="o">-</span> <span class="n">U</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sign</span> <span class="o">==</span> <span class="mi">1</span> <span class="k">else</span> <span class="n">mu_y</span> <span class="o">+</span> <span class="n">U</span>
+            <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s1">&#39;Y_obs&#39;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="n">mu_final</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="n">sigma_v</span><span class="p">,</span> <span class="n">observed</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">y</span><span class="p">)</span>
+
+            <span class="n">trace</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">sample</span><span class="p">(</span><span class="n">draws</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">draws</span><span class="p">,</span> <span class="n">tune</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">tune</span><span class="p">,</span> <span class="n">target_accept</span><span class="o">=</span><span class="mf">0.999</span><span class="p">,</span> <span class="n">progressbar</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">return_inferencedata</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">__extract_pymc_params</span><span class="p">(</span><span class="n">trace</span><span class="p">,</span> <span class="n">model_type</span><span class="o">=</span><span class="s1">&#39;cross&#39;</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">__optimize_pymc_panel</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Bayesian Estimation via PyMC for Panel Data (BC92).</span>
+<span class="sd">        </span>
+<span class="sd">        Incorporates the temporal decay parameter (eta) into the MCMC sampling.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">with</span> <span class="n">pm</span><span class="o">.</span><span class="n">Model</span><span class="p">()</span> <span class="k">as</span> <span class="n">model</span><span class="p">:</span>
+            <span class="n">beta</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s1">&#39;beta&#39;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">intercept</span><span class="p">:</span>
+                <span class="n">beta0</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s1">&#39;beta0&#39;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+                <span class="n">mu_y</span> <span class="o">=</span> <span class="n">beta0</span> <span class="o">+</span> <span class="n">pm</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">,</span> <span class="n">beta</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">mu_y</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">,</span> <span class="n">beta</span><span class="p">)</span>
+
+            <span class="n">sigma_v</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s1">&#39;sigma_v&#39;</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+            <span class="n">sigma_u</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s1">&#39;sigma_u&#39;</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+            <span class="n">mu</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s1">&#39;mu&#39;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+            <span class="n">eta</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s1">&#39;eta&#39;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mf">0.2</span><span class="p">)</span>
+
+            <span class="c1"># Base inefficiency term per firm</span>
+            <span class="n">U_i</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">TruncatedNormal</span><span class="p">(</span><span class="s1">&#39;U_i&#39;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="n">mu</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="n">sigma_u</span><span class="p">,</span> <span class="n">lower</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">num_firms</span><span class="p">)</span>
+
+            <span class="c1"># BC92 exponential decay</span>
+            <span class="n">time_diff</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">time_array</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">T_max_per_firm</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">firm_idx</span><span class="p">]</span>
+            <span class="n">decay</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="o">-</span><span class="n">eta</span> <span class="o">*</span> <span class="n">time_diff</span><span class="p">)</span>
+
+            <span class="n">U_it</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Deterministic</span><span class="p">(</span><span class="s1">&#39;U_it&#39;</span><span class="p">,</span> <span class="n">U_i</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">firm_idx</span><span class="p">]</span> <span class="o">*</span> <span class="n">decay</span><span class="p">)</span>
+            <span class="n">pm</span><span class="o">.</span><span class="n">Deterministic</span><span class="p">(</span><span class="s1">&#39;TE&#39;</span><span class="p">,</span> <span class="n">pm</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="o">-</span><span class="n">U_it</span><span class="p">))</span>
+
+            <span class="n">mu_final</span> <span class="o">=</span> <span class="n">mu_y</span> <span class="o">-</span> <span class="n">U_it</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sign</span> <span class="o">==</span> <span class="mi">1</span> <span class="k">else</span> <span class="n">mu_y</span> <span class="o">+</span> <span class="n">U_it</span>
+            <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s1">&#39;Y_obs&#39;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="n">mu_final</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="n">sigma_v</span><span class="p">,</span> <span class="n">observed</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">y</span><span class="p">)</span>
+
+            <span class="n">trace</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">sample</span><span class="p">(</span><span class="n">draws</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">draws</span><span class="p">,</span> <span class="n">tune</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">tune</span><span class="p">,</span> <span class="n">target_accept</span><span class="o">=</span><span class="mf">0.999</span><span class="p">,</span> <span class="n">progressbar</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">return_inferencedata</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">__extract_pymc_params</span><span class="p">(</span><span class="n">trace</span><span class="p">,</span> <span class="n">model_type</span><span class="o">=</span><span class="s1">&#39;panel&#39;</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">__optimize_pymc_greene_tre</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Bayesian Estimation via PyMC for Greene 2005 True Random Effects (TRE).</span>
+<span class="sd">        </span>
+<span class="sd">        Separates structural unobserved heterogeneity (alpha_i) from pure</span>
+<span class="sd">        managerial inefficiency (U_it).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">with</span> <span class="n">pm</span><span class="o">.</span><span class="n">Model</span><span class="p">()</span> <span class="k">as</span> <span class="n">model</span><span class="p">:</span>
+            <span class="n">beta</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s1">&#39;beta&#39;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+            
+            <span class="c1"># Hierarchical structure for Firm-specific Random Effects</span>
+            <span class="n">mu_alpha</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s1">&#39;mu_alpha&#39;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+            <span class="n">sigma_alpha</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s1">&#39;sigma_alpha&#39;</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+            <span class="n">alpha_offset</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s1">&#39;alpha_offset&#39;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">num_firms</span><span class="p">)</span>
+            <span class="n">alpha_i</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Deterministic</span><span class="p">(</span><span class="s1">&#39;alpha_i&#39;</span><span class="p">,</span> <span class="n">mu_alpha</span> <span class="o">+</span> <span class="n">alpha_offset</span> <span class="o">*</span> <span class="n">sigma_alpha</span><span class="p">)</span>
+
+            <span class="n">mu_y</span> <span class="o">=</span> <span class="n">alpha_i</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">firm_idx</span><span class="p">]</span> <span class="o">+</span> <span class="n">pm</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">,</span> <span class="n">beta</span><span class="p">)</span>
+
+            <span class="n">sigma_u</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s1">&#39;sigma_u&#39;</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+            <span class="n">U_it</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s1">&#39;U_it&#39;</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="n">sigma_u</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">y</span><span class="p">))</span>
+            <span class="n">sigma_v</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s1">&#39;sigma_v&#39;</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+
+            <span class="n">pm</span><span class="o">.</span><span class="n">Deterministic</span><span class="p">(</span><span class="s1">&#39;TE&#39;</span><span class="p">,</span> <span class="n">pm</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="o">-</span><span class="n">U_it</span><span class="p">))</span>
+
+            <span class="n">mu_final</span> <span class="o">=</span> <span class="n">mu_y</span> <span class="o">-</span> <span class="n">U_it</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sign</span> <span class="o">==</span> <span class="mi">1</span> <span class="k">else</span> <span class="n">mu_y</span> <span class="o">+</span> <span class="n">U_it</span>
+            <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s1">&#39;Y_obs&#39;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="n">mu_final</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="n">sigma_v</span><span class="p">,</span> <span class="n">observed</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">y</span><span class="p">)</span>
+
+            <span class="n">trace</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">sample</span><span class="p">(</span>
+                <span class="n">draws</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">draws</span><span class="p">,</span> 
+                <span class="n">tune</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">tune</span><span class="p">,</span> 
+                <span class="n">target_accept</span><span class="o">=</span><span class="mf">0.999</span><span class="p">,</span> 
+                <span class="n">progressbar</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> 
+                <span class="n">return_inferencedata</span><span class="o">=</span><span class="kc">True</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">__extract_pymc_params</span><span class="p">(</span><span class="n">trace</span><span class="p">,</span> <span class="n">model_type</span><span class="o">=</span><span class="s1">&#39;tre&#39;</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">__extract_pymc_params</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">trace</span><span class="p">,</span> <span class="n">model_type</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Standardize PyMC posterior output to perfectly match the MLE return structure.</span>
+<span class="sd">        </span>
+<span class="sd">        Extracts posterior means and standard deviations to populate `self._params` </span>
+<span class="sd">        and `self._std_err`.</span>
+
+<span class="sd">        :param trace: The PyMC InferenceData object.</span>
+<span class="sd">        :param model_type: Str indicating &#39;cross&#39;, &#39;panel&#39;, or &#39;tre&#39;.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">pymc_trace</span> <span class="o">=</span> <span class="n">trace</span>
+        <span class="n">post</span> <span class="o">=</span> <span class="n">trace</span><span class="o">.</span><span class="n">posterior</span>
+
+        <span class="n">beta_m</span> <span class="o">=</span> <span class="n">post</span><span class="p">[</span><span class="s1">&#39;beta&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;chain&#39;</span><span class="p">,</span> <span class="s1">&#39;draw&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">values</span>
+        <span class="n">beta_s</span> <span class="o">=</span> <span class="n">post</span><span class="p">[</span><span class="s1">&#39;beta&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">std</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;chain&#39;</span><span class="p">,</span> <span class="s1">&#39;draw&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">values</span>
+
+        <span class="c1"># Handle intercept</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">intercept</span> <span class="ow">and</span> <span class="n">model_type</span> <span class="o">!=</span> <span class="s1">&#39;tre&#39;</span><span class="p">:</span> 
+            <span class="n">betas</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(([</span><span class="n">post</span><span class="p">[</span><span class="s1">&#39;beta0&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="o">.</span><span class="n">values</span><span class="p">],</span> <span class="n">beta_m</span><span class="p">))</span>
+            <span class="n">betas_se</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(([</span><span class="n">post</span><span class="p">[</span><span class="s1">&#39;beta0&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">std</span><span class="p">()</span><span class="o">.</span><span class="n">values</span><span class="p">],</span> <span class="n">beta_s</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">betas</span><span class="p">,</span> <span class="n">betas_se</span> <span class="o">=</span> <span class="n">beta_m</span><span class="p">,</span> <span class="n">beta_s</span>
+
+        <span class="k">if</span> <span class="n">model_type</span> <span class="o">==</span> <span class="s1">&#39;tre&#39;</span><span class="p">:</span>
+            <span class="n">mu_alpha_m</span><span class="p">,</span> <span class="n">mu_alpha_s</span> <span class="o">=</span> <span class="n">post</span><span class="p">[</span><span class="s1">&#39;mu_alpha&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">post</span><span class="p">[</span><span class="s1">&#39;mu_alpha&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">std</span><span class="p">()</span><span class="o">.</span><span class="n">values</span>
+            <span class="n">s_alpha_m</span><span class="p">,</span> <span class="n">s_alpha_s</span> <span class="o">=</span> <span class="n">post</span><span class="p">[</span><span class="s1">&#39;sigma_alpha&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">post</span><span class="p">[</span><span class="s1">&#39;sigma_alpha&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">std</span><span class="p">()</span><span class="o">.</span><span class="n">values</span>
+            <span class="n">su_m</span><span class="p">,</span> <span class="n">su_s</span> <span class="o">=</span> <span class="n">post</span><span class="p">[</span><span class="s1">&#39;sigma_u&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">post</span><span class="p">[</span><span class="s1">&#39;sigma_u&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">std</span><span class="p">()</span><span class="o">.</span><span class="n">values</span>
+            <span class="n">sv_m</span><span class="p">,</span> <span class="n">sv_s</span> <span class="o">=</span> <span class="n">post</span><span class="p">[</span><span class="s1">&#39;sigma_v&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">post</span><span class="p">[</span><span class="s1">&#39;sigma_v&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">std</span><span class="p">()</span><span class="o">.</span><span class="n">values</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_params</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">((</span><span class="n">betas</span><span class="p">,</span> <span class="p">[</span><span class="n">mu_alpha_m</span><span class="p">,</span> <span class="n">s_alpha_m</span><span class="p">,</span> <span class="n">su_m</span><span class="p">,</span> <span class="n">sv_m</span><span class="p">]))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_std_err</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">((</span><span class="n">betas_se</span><span class="p">,</span> <span class="p">[</span><span class="n">mu_alpha_s</span><span class="p">,</span> <span class="n">s_alpha_s</span><span class="p">,</span> <span class="n">su_s</span><span class="p">,</span> <span class="n">sv_s</span><span class="p">]))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># Reconstruct sigma2 and gamma from Bayesian sigma_u and sigma_v</span>
+            <span class="n">sigma_u_post</span> <span class="o">=</span> <span class="n">post</span><span class="p">[</span><span class="s1">&#39;sigma_u&#39;</span><span class="p">]</span>
+            <span class="n">sigma_v_post</span> <span class="o">=</span> <span class="n">post</span><span class="p">[</span><span class="s1">&#39;sigma_v&#39;</span><span class="p">]</span>
+            <span class="n">sigma2_post</span> <span class="o">=</span> <span class="n">sigma_u_post</span><span class="o">**</span><span class="mi">2</span> <span class="o">+</span> <span class="n">sigma_v_post</span><span class="o">**</span><span class="mi">2</span>
+            <span class="n">gamma_post</span> <span class="o">=</span> <span class="p">(</span><span class="n">sigma_u_post</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span> <span class="o">/</span> <span class="n">sigma2_post</span>
+
+            <span class="n">sigma2_m</span><span class="p">,</span> <span class="n">sigma2_s</span> <span class="o">=</span> <span class="n">sigma2_post</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">sigma2_post</span><span class="o">.</span><span class="n">std</span><span class="p">()</span><span class="o">.</span><span class="n">values</span>
+            <span class="n">gamma_m</span><span class="p">,</span> <span class="n">gamma_s</span> <span class="o">=</span> <span class="n">gamma_post</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">gamma_post</span><span class="o">.</span><span class="n">std</span><span class="p">()</span><span class="o">.</span><span class="n">values</span>
+
+            <span class="k">if</span> <span class="n">model_type</span> <span class="o">==</span> <span class="s1">&#39;panel&#39;</span><span class="p">:</span>
+                <span class="n">eta_m</span><span class="p">,</span> <span class="n">eta_s</span> <span class="o">=</span> <span class="n">post</span><span class="p">[</span><span class="s1">&#39;eta&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">post</span><span class="p">[</span><span class="s1">&#39;eta&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">std</span><span class="p">()</span><span class="o">.</span><span class="n">values</span>
+                <span class="n">mu_m</span><span class="p">,</span> <span class="n">mu_s</span> <span class="o">=</span> <span class="n">post</span><span class="p">[</span><span class="s1">&#39;mu&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">post</span><span class="p">[</span><span class="s1">&#39;mu&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">std</span><span class="p">()</span><span class="o">.</span><span class="n">values</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_params</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">((</span><span class="n">betas</span><span class="p">,</span> <span class="p">[</span><span class="n">mu_m</span><span class="p">,</span> <span class="n">eta_m</span><span class="p">,</span> <span class="n">sigma2_m</span><span class="p">,</span> <span class="n">gamma_m</span><span class="p">]))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_std_err</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">((</span><span class="n">betas_se</span><span class="p">,</span> <span class="p">[</span><span class="n">mu_s</span><span class="p">,</span> <span class="n">eta_s</span><span class="p">,</span> <span class="n">sigma2_s</span><span class="p">,</span> <span class="n">gamma_s</span><span class="p">]))</span>
+            <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">has_z</span><span class="p">:</span>
+                <span class="n">delta_m</span> <span class="o">=</span> <span class="n">post</span><span class="p">[</span><span class="s1">&#39;delta&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;chain&#39;</span><span class="p">,</span> <span class="s1">&#39;draw&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">values</span>
+                <span class="n">delta_s</span> <span class="o">=</span> <span class="n">post</span><span class="p">[</span><span class="s1">&#39;delta&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">std</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;chain&#39;</span><span class="p">,</span> <span class="s1">&#39;draw&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">values</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_params</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">((</span><span class="n">betas</span><span class="p">,</span> <span class="n">delta_m</span><span class="p">,</span> <span class="p">[</span><span class="n">sigma2_m</span><span class="p">,</span> <span class="n">gamma_m</span><span class="p">]))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_std_err</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">((</span><span class="n">betas_se</span><span class="p">,</span> <span class="n">delta_s</span><span class="p">,</span> <span class="p">[</span><span class="n">sigma2_s</span><span class="p">,</span> <span class="n">gamma_s</span><span class="p">]))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_params</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">((</span><span class="n">betas</span><span class="p">,</span> <span class="p">[</span><span class="n">sigma2_m</span><span class="p">,</span> <span class="n">gamma_m</span><span class="p">]))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_std_err</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">((</span><span class="n">betas_se</span><span class="p">,</span> <span class="p">[</span><span class="n">sigma2_s</span><span class="p">,</span> <span class="n">gamma_s</span><span class="p">]))</span>
+
+        <span class="c1"># LLF does not strictly map to Bayesian MCMC in the same way</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_llf</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span>
+
+<div class="viewcode-block" id="SFA.get_beta">
+<a class="viewcode-back" href="../../index.html#depp_sfa.SFA.get_beta">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_beta</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get the estimated coefficients for the frontier equation.</span>
+
+<span class="sd">        :returns: Array of estimated beta coefficients.</span>
+<span class="sd">        :rtype: numpy.ndarray</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">optimize</span><span class="p">()</span>
+        <span class="n">K</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="o">+</span> <span class="p">(</span><span class="mi">1</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">intercept</span> <span class="k">else</span> <span class="mi">0</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_params</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="n">K</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="SFA.get_residuals">
+<a class="viewcode-back" href="../../index.html#depp_sfa.SFA.get_residuals">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_residuals</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get the model residuals (epsilon = y - X*beta).</span>
+
+<span class="sd">        :returns: Array of residuals.</span>
+<span class="sd">        :rtype: numpy.ndarray</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">optimize</span><span class="p">()</span>
+        <span class="n">beta</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_beta</span><span class="p">()</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">intercept</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">y</span> <span class="o">-</span> <span class="n">beta</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">,</span> <span class="n">beta</span><span class="p">[</span><span class="mi">1</span><span class="p">:])</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">y</span> <span class="o">-</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span><span class="p">,</span> <span class="n">beta</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="SFA.get_lambda">
+<a class="viewcode-back" href="../../index.html#depp_sfa.SFA.get_lambda">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_lambda</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get the ratio of standard deviations (lambda = sigma_u / sigma_v).</span>
+
+<span class="sd">        :returns: Lambda value.</span>
+<span class="sd">        :rtype: float</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">optimize</span><span class="p">()</span>
+        <span class="n">gamma</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_params</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">gamma</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">gamma</span><span class="p">))</span></div>
+
+
+<div class="viewcode-block" id="SFA.get_sigma2">
+<a class="viewcode-back" href="../../index.html#depp_sfa.SFA.get_sigma2">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_sigma2</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get the total variance of the composite error (sigma^2).</span>
+
+<span class="sd">        :returns: Sigma squared value.</span>
+<span class="sd">        :rtype: float</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">optimize</span><span class="p">()</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_params</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span></div>
+
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">__teJ</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Calculate Technical Efficiency using Jondrow et al. (1982).</span>
+<span class="sd">        E[exp(-u) | e]</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">lam</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_lambda</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ustar</span> <span class="o">=</span> <span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">sign</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_residuals</span><span class="p">()</span> <span class="o">*</span> <span class="p">(</span><span class="n">lam</span><span class="o">**</span><span class="mi">2</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1</span><span class="o">+</span><span class="n">lam</span><span class="o">**</span><span class="mi">2</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sstar</span> <span class="o">=</span> <span class="p">(</span><span class="n">lam</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1</span> <span class="o">+</span> <span class="n">lam</span><span class="o">**</span><span class="mi">2</span><span class="p">))</span> <span class="o">*</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_sigma2</span><span class="p">())</span>
+        <span class="n">ratio</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ustar</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">sstar</span>
+        <span class="n">log_term</span> <span class="o">=</span> <span class="n">norm</span><span class="o">.</span><span class="n">logpdf</span><span class="p">(</span><span class="n">ratio</span><span class="p">)</span> <span class="o">-</span> <span class="n">log_ndtr</span><span class="p">(</span><span class="n">ratio</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">ustar</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">sstar</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">log_term</span><span class="p">))</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">__te</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Calculate Technical Efficiency using Battese &amp; Coelli (1988).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">lam</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_lambda</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ustar</span> <span class="o">=</span> <span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">sign</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_residuals</span><span class="p">()</span> <span class="o">*</span> <span class="p">(</span><span class="n">lam</span><span class="o">**</span><span class="mi">2</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1</span><span class="o">+</span><span class="n">lam</span><span class="o">**</span><span class="mi">2</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sstar</span> <span class="o">=</span> <span class="p">(</span><span class="n">lam</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1</span> <span class="o">+</span> <span class="n">lam</span><span class="o">**</span><span class="mi">2</span><span class="p">))</span> <span class="o">*</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_sigma2</span><span class="p">())</span>
+        <span class="n">ratio</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ustar</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">sstar</span>
+        <span class="n">log_term</span> <span class="o">=</span> <span class="n">log_ndtr</span><span class="p">(</span><span class="n">ratio</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">sstar</span><span class="p">)</span> <span class="o">-</span> <span class="n">log_ndtr</span><span class="p">(</span><span class="n">ratio</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">log_term</span> <span class="o">+</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">sstar</span><span class="o">**</span><span class="mi">2</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">ustar</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">__teMod</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Calculate Technical Efficiency using the modified approach.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">lam</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_lambda</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ustar</span> <span class="o">=</span> <span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">sign</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_residuals</span><span class="p">()</span> <span class="o">*</span> <span class="p">(</span><span class="n">lam</span><span class="o">**</span><span class="mi">2</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1</span><span class="o">+</span><span class="n">lam</span><span class="o">**</span><span class="mi">2</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">minimum</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">ustar</span><span class="p">))</span>
+
+<div class="viewcode-block" id="SFA.get_technical_efficiency">
+<a class="viewcode-back" href="../../index.html#depp_sfa.SFA.get_technical_efficiency">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_technical_efficiency</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get the technical efficiency scores for all observations.</span>
+
+<span class="sd">        If Bayesian (PyMC) was used, returns the mean of the posterior `TE` distribution.</span>
+<span class="sd">        Otherwise, applies the user-selected frequentist decomposition.</span>
+
+<span class="sd">        :returns: Array of efficiency scores bounded between 0 and 1.</span>
+<span class="sd">        :rtype: numpy.ndarray</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">optimize</span><span class="p">()</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">estimation_method</span> <span class="ow">and</span> <span class="s1">&#39;PyMC&#39;</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">estimation_method</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">pymc_trace</span><span class="o">.</span><span class="n">posterior</span><span class="p">[</span><span class="s1">&#39;TE&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;chain&#39;</span><span class="p">,</span> <span class="s1">&#39;draw&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">values</span>
+            
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">method</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">TE_teJ</span><span class="p">:</span> <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">__teJ</span><span class="p">()</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">method</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">TE_te</span><span class="p">:</span> <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">__te</span><span class="p">()</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">method</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">TE_teMod</span><span class="p">:</span> <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">__teMod</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span> <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Undefined decomposition technique.&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="SFA.summary">
+<a class="viewcode-back" href="../../index.html#depp_sfa.SFA.summary">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">summary</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Print a formatted summary table of the estimation results.</span>
+<span class="sd">        </span>
+<span class="sd">        Outputs coefficients, standard errors, z-values, p-values, and </span>
+<span class="sd">        diagnostic information (ESS checks for Bayesian models).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">optimize</span><span class="p">()</span>
+
+        <span class="n">ess_map</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="c1"># Diagnostic check for MCMC to warn users of poor convergence</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_method</span> <span class="o">==</span> <span class="s1">&#39;pymc&#39;</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">pymc_trace</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="kn">import</span><span class="w"> </span><span class="nn">arviz</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">az</span>
+            <span class="n">diag</span> <span class="o">=</span> <span class="n">az</span><span class="o">.</span><span class="n">summary</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">pymc_trace</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">idx</span> <span class="ow">in</span> <span class="n">diag</span><span class="o">.</span><span class="n">index</span><span class="p">:</span>
+                <span class="n">ess_map</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span> <span class="o">=</span> <span class="n">diag</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">idx</span><span class="p">,</span> <span class="s1">&#39;ess_bulk&#39;</span><span class="p">]</span>
+            
+            <span class="n">su_ess</span> <span class="o">=</span> <span class="n">ess_map</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;sigma_u&#39;</span><span class="p">,</span> <span class="mi">9999</span><span class="p">)</span>
+            <span class="n">sv_ess</span> <span class="o">=</span> <span class="n">ess_map</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;sigma_v&#39;</span><span class="p">,</span> <span class="mi">9999</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">su_ess</span> <span class="o">&lt;</span> <span class="mi">400</span> <span class="ow">or</span> <span class="n">sv_ess</span> <span class="o">&lt;</span> <span class="mi">400</span><span class="p">:</span>
+                <span class="n">ess_map</span><span class="p">[</span><span class="s1">&#39;sigma2&#39;</span><span class="p">],</span> <span class="n">ess_map</span><span class="p">[</span><span class="s1">&#39;gamma&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span>
+
+        <span class="n">names</span> <span class="o">=</span> <span class="p">([</span><span class="s1">&#39;(Intercept)&#39;</span><span class="p">]</span> <span class="o">+</span> <span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x_names</span><span class="p">))</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">intercept</span> <span class="k">else</span> <span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x_names</span><span class="p">)</span>
+        
+        <span class="c1"># Build parameter names mapping based on the active model</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_panel</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">panel_model</span> <span class="o">==</span> <span class="s1">&#39;greene&#39;</span><span class="p">:</span>
+            <span class="k">if</span> <span class="s1">&#39;pymc&#39;</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_method</span><span class="p">:</span>
+                <span class="n">names</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x_names</span><span class="p">)</span> <span class="o">+</span> <span class="p">[</span><span class="s1">&#39;mu_alpha&#39;</span><span class="p">,</span> <span class="s1">&#39;sigma_alpha&#39;</span><span class="p">,</span> <span class="s1">&#39;sigma_u&#39;</span><span class="p">,</span> <span class="s1">&#39;sigma_v&#39;</span><span class="p">,</span> <span class="s1">&#39;sigma2&#39;</span><span class="p">,</span> <span class="s1">&#39;gamma&#39;</span><span class="p">]</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">names</span> <span class="o">+=</span> <span class="p">[</span><span class="s1">&#39;sigma_u&#39;</span><span class="p">,</span> <span class="s1">&#39;sigma_v&#39;</span><span class="p">,</span> <span class="s1">&#39;sigma2&#39;</span><span class="p">,</span> <span class="s1">&#39;gamma&#39;</span><span class="p">]</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_panel</span><span class="p">:</span>
+            <span class="k">if</span> <span class="s1">&#39;pymc&#39;</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_method</span><span class="p">:</span>
+                <span class="n">names</span> <span class="o">+=</span> <span class="p">[</span><span class="s1">&#39;mu&#39;</span><span class="p">,</span> <span class="s1">&#39;eta&#39;</span><span class="p">,</span> <span class="s1">&#39;sigma_u&#39;</span><span class="p">,</span> <span class="s1">&#39;sigma_v&#39;</span><span class="p">,</span> <span class="s1">&#39;sigma2&#39;</span><span class="p">,</span> <span class="s1">&#39;gamma&#39;</span><span class="p">]</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">names</span> <span class="o">+=</span> <span class="p">[</span><span class="s1">&#39;eta&#39;</span><span class="p">,</span> <span class="s1">&#39;sigma_u&#39;</span><span class="p">,</span> <span class="s1">&#39;sigma_v&#39;</span><span class="p">,</span> <span class="s1">&#39;sigma2&#39;</span><span class="p">,</span> <span class="s1">&#39;gamma&#39;</span><span class="p">]</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">has_z</span><span class="p">:</span>
+            <span class="n">names</span> <span class="o">+=</span> <span class="bp">self</span><span class="o">.</span><span class="n">z_names</span> <span class="o">+</span> <span class="p">[</span><span class="s1">&#39;sigma_u&#39;</span><span class="p">,</span> <span class="s1">&#39;sigma_v&#39;</span><span class="p">,</span> <span class="s1">&#39;sigma2&#39;</span><span class="p">,</span> <span class="s1">&#39;gamma&#39;</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">names</span> <span class="o">+=</span> <span class="p">[</span><span class="s1">&#39;sigma_u&#39;</span><span class="p">,</span> <span class="s1">&#39;sigma_v&#39;</span><span class="p">,</span> <span class="s1">&#39;sigma2&#39;</span><span class="p">,</span> <span class="s1">&#39;gamma&#39;</span><span class="p">]</span>
+
+        <span class="n">s2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_params</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
+        <span class="n">gam</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_params</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">s2_se</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_std_err</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
+        <span class="n">gam_se</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_std_err</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+        
+        <span class="c1"># Back out individual standard deviations for display</span>
+        <span class="n">su_val</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">gam</span> <span class="o">*</span> <span class="n">s2</span><span class="p">)</span> <span class="k">if</span> <span class="n">gam</span> <span class="o">*</span> <span class="n">s2</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mi">0</span>
+        <span class="n">sv_val</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">((</span><span class="mi">1</span> <span class="o">-</span> <span class="n">gam</span><span class="p">)</span> <span class="o">*</span> <span class="n">s2</span><span class="p">)</span> <span class="k">if</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">gam</span><span class="p">)</span> <span class="o">*</span> <span class="n">s2</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mi">0</span>
+
+        <span class="n">display_params</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">display_std</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="n">num_main_params</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_params</span><span class="p">)</span> <span class="o">-</span> <span class="mi">2</span>
+
+        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">name</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">names</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">num_main_params</span><span class="p">:</span>
+                <span class="n">display_params</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_params</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+                <span class="n">display_std</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_std_err</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+            <span class="k">elif</span> <span class="n">name</span> <span class="o">==</span> <span class="s1">&#39;sigma_u&#39;</span><span class="p">:</span>
+                <span class="n">display_params</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">su_val</span><span class="p">)</span>
+                <span class="n">display_std</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">name</span> <span class="o">==</span> <span class="s1">&#39;sigma_v&#39;</span><span class="p">:</span>
+                <span class="n">display_params</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">sv_val</span><span class="p">)</span>
+                <span class="n">display_std</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">name</span> <span class="o">==</span> <span class="s1">&#39;sigma2&#39;</span><span class="p">:</span>
+                <span class="n">display_params</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">s2</span><span class="p">)</span>
+                <span class="n">display_std</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">s2_se</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">name</span> <span class="o">==</span> <span class="s1">&#39;gamma&#39;</span><span class="p">:</span>
+                <span class="n">display_params</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">gam</span><span class="p">)</span>
+                <span class="n">display_std</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">gam_se</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">display_params</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">)</span>
+                <span class="n">display_std</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">)</span>
+
+        <span class="n">display_params</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">display_params</span><span class="p">)</span>
+        <span class="n">display_std</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">display_std</span><span class="p">)</span>
+
+        <span class="c1"># Compute Frequentist Z-statistics and P-values</span>
+        <span class="k">with</span> <span class="n">np</span><span class="o">.</span><span class="n">errstate</span><span class="p">(</span><span class="n">divide</span><span class="o">=</span><span class="s1">&#39;ignore&#39;</span><span class="p">,</span> <span class="n">invalid</span><span class="o">=</span><span class="s1">&#39;ignore&#39;</span><span class="p">):</span>
+            <span class="n">z_values</span> <span class="o">=</span> <span class="n">display_params</span> <span class="o">/</span> <span class="n">display_std</span>
+            <span class="n">p_values</span> <span class="o">=</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">norm</span><span class="o">.</span><span class="n">sf</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">z_values</span><span class="p">))</span>
+
+        <span class="n">rows</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">name</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">names</span><span class="p">):</span>
+            <span class="n">current_ess</span> <span class="o">=</span> <span class="mi">9999</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_method</span> <span class="o">==</span> <span class="s1">&#39;pymc&#39;</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">name</span> <span class="o">==</span> <span class="s1">&#39;(Intercept)&#39;</span><span class="p">:</span> <span class="n">key</span> <span class="o">=</span> <span class="s1">&#39;beta0&#39;</span>
+                <span class="k">elif</span> <span class="n">name</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">x_names</span><span class="p">:</span> <span class="n">key</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;beta[</span><span class="si">{</span><span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">x_names</span><span class="p">)</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">name</span><span class="p">)</span><span class="si">}</span><span class="s2">]&quot;</span>
+                <span class="k">else</span><span class="p">:</span> <span class="n">key</span> <span class="o">=</span> <span class="n">name</span>
+                <span class="n">current_ess</span> <span class="o">=</span> <span class="n">ess_map</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="mi">9999</span><span class="p">)</span>
+
+            <span class="c1"># Mask out statistics if Effective Sample Size is dangerously low</span>
+            <span class="k">if</span> <span class="n">current_ess</span> <span class="o">&lt;</span> <span class="mi">400</span><span class="p">:</span>
+                <span class="n">rows</span><span class="o">.</span><span class="n">append</span><span class="p">({</span>
+                    <span class="s1">&#39;Estimate&#39;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="n">display_params</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="mi">5</span><span class="p">),</span>
+                    <span class="s1">&#39;Std. Error&#39;</span><span class="p">:</span> <span class="s1">&#39;Low ESS&#39;</span><span class="p">,</span>
+                    <span class="s1">&#39;z value&#39;</span><span class="p">:</span> <span class="s1">&#39;---&#39;</span><span class="p">,</span>
+                    <span class="s1">&#39;Pr(&gt;|z|)&#39;</span><span class="p">:</span> <span class="s1">&#39;---&#39;</span><span class="p">,</span>
+                    <span class="s1">&#39;Sig.&#39;</span><span class="p">:</span> <span class="s1">&#39;&#39;</span>
+                <span class="p">})</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">p</span> <span class="o">=</span> <span class="n">p_values</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+                <span class="n">std</span> <span class="o">=</span> <span class="n">display_std</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+                <span class="n">z</span> <span class="o">=</span> <span class="n">z_values</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+                <span class="n">star</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;***&#39;</span> <span class="k">if</span> <span class="n">p</span> <span class="o">&lt;</span> <span class="mf">0.01</span> <span class="k">else</span> <span class="s1">&#39;**&#39;</span> <span class="k">if</span> <span class="n">p</span> <span class="o">&lt;</span> <span class="mf">0.05</span> <span class="k">else</span> <span class="s1">&#39;*&#39;</span> <span class="k">if</span> <span class="n">p</span> <span class="o">&lt;</span> <span class="mf">0.1</span> <span class="k">else</span> <span class="s1">&#39;&#39;</span><span class="p">)</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="n">p</span><span class="p">)</span> <span class="k">else</span> <span class="s1">&#39;&#39;</span>
+                
+                <span class="n">rows</span><span class="o">.</span><span class="n">append</span><span class="p">({</span>
+                    <span class="s1">&#39;Estimate&#39;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="n">display_params</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="mi">5</span><span class="p">),</span>
+                    <span class="s1">&#39;Std. Error&#39;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="n">std</span><span class="p">,</span> <span class="mi">6</span><span class="p">)</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="n">std</span><span class="p">)</span> <span class="k">else</span> <span class="s1">&#39;---&#39;</span><span class="p">,</span>
+                    <span class="s1">&#39;z value&#39;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="n">z</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="n">z</span><span class="p">)</span> <span class="k">else</span> <span class="s1">&#39;---&#39;</span><span class="p">,</span>
+                    <span class="s1">&#39;Pr(&gt;|z|)&#39;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="n">p</span><span class="p">)</span> <span class="k">else</span> <span class="s1">&#39;---&#39;</span><span class="p">,</span>
+                    <span class="s1">&#39;Sig.&#39;</span><span class="p">:</span> <span class="n">star</span>
+                <span class="p">})</span>
+
+        <span class="n">res_table</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">rows</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">names</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">Stochastic Frontier Analysis (</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">estimation_method</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;=&quot;</span> <span class="o">*</span> <span class="mi">75</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">res_table</span><span class="o">.</span><span class="n">to_string</span><span class="p">(</span><span class="n">na_rep</span><span class="o">=</span><span class="s1">&#39;NaN&#39;</span><span class="p">))</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;-&quot;</span> <span class="o">*</span> <span class="mi">75</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Signif. codes:  0 &#39;***&#39; 0.01 &#39;**&#39; 0.05 &#39;*&#39; 0.1 &#39; &#39; 1&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_llf</span><span class="p">):</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Log-Likelihood:  </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_llf</span><span class="si">:</span><span class="s2">.5f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;=&quot;</span> <span class="o">*</span> <span class="mi">75</span><span class="p">)</span></div>
+</div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, Anashkina, Lucereau, Pyle, Tastet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
