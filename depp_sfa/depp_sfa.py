@@ -58,8 +58,8 @@ class SFA:
         self, y, x, z=None, id_var=None, time_var=None,
         fun=FUN_PROD, intercept=True, lamda0=1, method=TE_teJ,
         form='linear', dummy_indices=None, inference_method='mle',
-        panel_model='bc92', draws=1500, tune=1500,
-        standardize=False
+        panel_model='bc92', draws=3000, tune=3000,
+        standardize=True
     ):
         """
         Initialize the SFA model.
@@ -90,11 +90,13 @@ class SFA:
         :type inference_method: str, optional
         :param panel_model: 'bc92' or 'greene'. Defaults to 'bc92'.
         :type panel_model: str, optional
-        :param draws: Number of MCMC draws for PyMC. Defaults to 1500.
+        :param draws: Number of MCMC draws for PyMC. Defaults to 3000.
         :type draws: int, optional
-        :param tune: Number of tuning steps for PyMC. Defaults to 1500.
+        :param tune: Number of tuning steps for PyMC. Defaults to 3000.
         :type tune: int, optional
+        :param standardize: Whether to standardize the input variables. Defaults to True.
         """
+        
         self.fun = fun
         self.intercept = intercept
         self.lamda0 = lamda0
@@ -513,25 +515,30 @@ class SFA:
         """
         with pm.Model() as model:
             # Priors for the frontier parameters
-            beta = pm.Normal('beta', mu=0, sigma=10, shape=len(self.x[0]))
+            beta = pm.Normal('beta', mu=0, sigma=3, shape=len(self.x[0]))
 
             if self.intercept:
-                beta0 = pm.Normal('beta0', mu=0, sigma=10)
+                beta0 = pm.Normal('beta0', mu=0, sigma=5)
                 mu_y = beta0 + pm.math.dot(self.x, beta)
             else:
                 mu_y = pm.math.dot(self.x, beta)
 
             # Priors for error variances
-            sigma_v = pm.HalfNormal('sigma_v', sigma=5)
-            sigma_u = pm.HalfNormal('sigma_u', sigma=5)
+            sigma_v = pm.HalfNormal('sigma_v', sigma=1)
+            sigma_u = pm.HalfNormal('sigma_u', sigma=1)
 
             # Define inefficiency distribution (U)
             if self.has_z:
-                delta = pm.Normal('delta', mu=0, sigma=10, shape=self.z.shape[1])
+                delta = pm.Normal('delta', mu=0, sigma=3, shape=self.z.shape[1])
                 mu_u = pm.math.dot(self.z, delta)
-                U = pm.TruncatedNormal('U', mu=mu_u, sigma=sigma_u, lower=0, shape=self.x.shape[0])
+                
+                # Non-Centered Parameterization for Truncated Normal
+                U_raw = pm.TruncatedNormal('U_raw', mu=0, sigma=1, lower=0, shape=self.x.shape[0])
+                U = pm.Deterministic('U', mu_u + U_raw * sigma_u)
             else:
-                U = pm.HalfNormal('U', sigma=sigma_u, shape=self.x.shape[0])
+                # Non-Centered Parameterization for Half-Normal
+                U_raw = pm.HalfNormal('U_raw', sigma=1, shape=self.x.shape[0])
+                U = pm.Deterministic('U', U_raw * sigma_u)
 
             # Deterministic calculation of Technical Efficiency
             pm.Deterministic('TE', pm.math.exp(-U))
@@ -540,7 +547,7 @@ class SFA:
             mu_final = mu_y - U if self.sign == 1 else mu_y + U
             pm.Normal('Y_obs', mu=mu_final, sigma=sigma_v, observed=self.y)
 
-            trace = pm.sample(draws=self.draws, tune=self.tune, target_accept=0.999, progressbar=False, return_inferencedata=True)
+            trace = pm.sample(draws=self.draws, tune=self.tune, target_accept=0.999, progressbar=True, return_inferencedata=True)
             self.__extract_pymc_params(trace, model_type='cross')
 
     def __optimize_pymc_panel(self):
@@ -564,8 +571,9 @@ class SFA:
             mu = pm.Normal('mu', mu=0, sigma=1)
             eta = pm.Normal('eta', mu=0, sigma=0.2)
 
-            # Base inefficiency term per firm
-            U_i = pm.TruncatedNormal('U_i', mu=mu, sigma=sigma_u, lower=0, shape=self.num_firms)
+            # Base inefficiency term per firm (Non-Centered Parameterization)
+            U_raw = pm.TruncatedNormal('U_raw', mu=0, sigma=1, lower=0, shape=self.num_firms)
+            U_i = pm.Deterministic('U_i', mu + U_raw * sigma_u)
 
             # BC92 exponential decay
             time_diff = self.time_array - self.T_max_per_firm[self.firm_idx]
@@ -577,9 +585,9 @@ class SFA:
             mu_final = mu_y - U_it if self.sign == 1 else mu_y + U_it
             pm.Normal('Y_obs', mu=mu_final, sigma=sigma_v, observed=self.y)
 
-            trace = pm.sample(draws=self.draws, tune=self.tune, target_accept=0.999, progressbar=False, return_inferencedata=True)
+            trace = pm.sample(draws=self.draws, tune=self.tune, target_accept=0.999, progressbar=True, return_inferencedata=True)
             self.__extract_pymc_params(trace, model_type='panel')
-
+            
     def __optimize_pymc_greene_tre(self):
         """
         Bayesian Estimation via PyMC for Greene 2005 True Random Effects (TRE).
@@ -599,7 +607,10 @@ class SFA:
             mu_y = alpha_i[self.firm_idx] + pm.math.dot(self.x, beta)
 
             sigma_u = pm.HalfNormal('sigma_u', sigma=2)
-            U_it = pm.HalfNormal('U_it', sigma=sigma_u, shape=len(self.y))
+            
+            U_raw = pm.HalfNormal('U_raw', sigma=1, shape=len(self.y))
+            U_it = pm.Deterministic('U_it', U_raw * sigma_u)
+            
             sigma_v = pm.HalfNormal('sigma_v', sigma=2)
 
             pm.Deterministic('TE', pm.math.exp(-U_it))
