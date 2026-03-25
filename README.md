@@ -1,160 +1,101 @@
-# Depp_sfa: stochastic frontier analysis
+# Depp_sfa: Stochastic Frontier Analysis (SFA)
 
 [![Documentation Status](https://readthedocs.org/projects/depp-sfa/badge/?version=latest)](https://depp-sfa.readthedocs.io/en/latest/?badge=latest)
 
-Depp_sfa is a python library dedicated to the estimation of stochastic frontier analysis (sfa) models. 
+**Depp_sfa** is a Python library dedicated to the estimation of Stochastic Frontier Analysis (SFA) models. It is specifically designed to provide high robustness against numerical convergence issues—such as "boundary effects"—frequently encountered in applied econometrics.
 
-It is designed to provide high robustness against the numerical convergence issues frequently encountered in applied econometrics. For cross-sectional data, the library relies primarily on maximum likelihood estimation (mle), featuring an automatic fallback to bayesian estimation (mcmc via pymc) in the event of optimization failure. For panel data, it implements a strictly bayesian estimation of the dynamic battese and coelli (1992) model.
+---
 
-## Main features
+## Key Features
 
-* Production and cost frontiers: supports both orientations.
-* Functional forms: linear, cobb-douglas, and translog specifications. Includes support for dummy variables.
-* Cross-sectional data: standard estimation with optional inclusion of inefficiency determinants (bc95 model).
-* Panel data (time-varying): implementation of the battese and coelli (1992) model, capturing the temporal evolution of technical inefficiency.
-* True effects (greene 2005): integration of unobserved heterogeneity separation.
-* Efficiency decomposition methods: jondrow et al. (1982), battese and coelli (1988), and a modified approach.
+* **Hybrid Inference**: Primarily relies on Maximum Likelihood Estimation (MLE), featuring an **automatic fallback to Bayesian estimation** (MCMC via PyMC) if the optimization fails to converge.
+* **Advanced Panel Data**: Implements the dynamic **Battese & Coelli (1992)** model for time-varying inefficiency and **Greene (2005)** True Fixed/Random Effects.
+* **Functional Flexibility**: Supports Linear, **Cobb-Douglas**, and **Translog** specifications with automatic handling of log-transformations, interaction terms, and dummy variables.
+* **Built-in Standardization**: Includes an internal preprocessing option (`standardize=True`) to center and scale continuous variables, ensuring stable solver convergence.
 
-## Mle versus pymc
 
-The library offers two distinct inference methods to adapt to your data structure and overcome traditional solver limitations.
 
-Mle (maximum likelihood estimation) is the standard frequentist approach. It is computationally fast and works well on large, balanced cross-sectional datasets. However, it frequently suffers from boundary failures (where the inefficiency variance collapses to zero) on unbalanced panels or when dealing with high ratios of singletons.
-
-Pymc (bayesian inference) is the robust alternative. By integrating prior distributions, it prevents boundary collapses and successfully separates signal from noise even when the majority of the panel consists of single observations. It provides full posterior distributions but requires more computation time.
+---
 
 ## Installation
 
-The library can be installed directly from its git repository:
+Install the library directly from the repository:
 
-```bash
+# --- BASH START ---
 pip install depp_sfa
-```
+# --- BASH END ---
 
-## Usage and data preparation
+---
 
-It is strongly recommended to standardize (center and scale) continuous variables prior to estimation to ensure the convergence of the optimization algorithms.
+## Quick Start
 
-```python
+The library can automatically handle data scaling and functional form transformations (logs, interactions, and squares).
+
+# --- PYTHON START ---
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler
-from depp_SFA import SFA, FUN_COST
+from depp_sfa import SFA, FUN_COST
 
-# 1. data preparation
-df = pd.read_csv("data.csv")
-df = df[(df["cost"] > 0) & (df["output"] > 0)]
+# 1. Load your data
+df = pd.read_csv("utility_data.csv")
 
-# standardization
-vars_to_scale = ["density", "quality_index"]
-scaler = StandardScaler()
-df[vars_to_scale] = scaler.fit_transform(df[vars_to_scale])
-
-# 2. vector extraction
-y = df["cost"].to_numpy(dtype=float)
-X = df[["output"] + vars_to_scale].to_numpy(dtype=float)
-firm_ids = df["firm_id"].to_numpy()
-years = df["year"].to_numpy(dtype=float)
-Z_vars = df[["contract_type", "vandalism_risk"]].to_numpy(dtype=float)
-```
-
-## Implementation guide
-
-### 1. Panel data with time evolution (bc92)
-
-The battese and coelli (1992) model captures how inefficiency evolves over time using a decay parameter. It is best estimated using pymc for short or unbalanced panels.
-
-```python
-model_bc92 = SFA(
-    y=y, 
-    x=X, 
-    id_var=firm_ids, 
-    time_var=years, 
-    fun=FUN_COST, 
-    panel_model='bc92',
-    inference_method='pymc', # or mle
-    draws=2000
-)
-
-# display results
-model_bc92.summary()
-
-# retrieve efficiency scores
-efficiency_scores = model_bc92.get_technical_efficiency()
-```
-
-### 2. Inefficiency effects model (bc95)
-
-The battese and coelli (1995) model uses environmental variables (z) to explain why certain units are less efficient, rather than treating these variables as direct cost drivers.
-
-```python
-model_bc95 = SFA(
-    y=y, 
-    x=X, 
-    z=Z_vars,
-    fun=FUN_COST,      
-    inference_method='pymc', #or mle
-    draws=2000
-)
-
-# display results
-model_bc95.summary()
-```
-
-### 3. True random effects (greene 2005)
-
-This specification separates unobserved structural heterogeneity (specific to each firm) from pure managerial inefficiency. It prevents the model from penalizing firms for structural geographical disadvantages.
-
-```python
-model_greene = SFA(
-    y=y, 
-    x=X, 
-    id_var=firm_ids,
-    time_var=years,
+# 2. Instantiate the model
+# Using 'standardize=True' is highly recommended for Translog forms
+model = SFA(
+    y=df["total_cost"].values,
+    x=df[["output", "labor_price", "capital_price"]].values,
     fun=FUN_COST,
-    panel_model='greene',
-    inference_method='pymc', # or mle
-    draws=2000
+    form='translog',
+    standardize=True,
+    inference_method='mle' # Falls back to 'pymc' automatically if MLE fails
 )
 
-# display results
-model_greene.summary()
-```
+# 3. Estimate and display results
+model.summary()
 
-## Api documentation (sfa class)
+# 4. Retrieve Efficiency Scores (TE)
+te_scores = model.get_technical_efficiency()
+# --- PYTHON END ---
 
-### Instantiation: sfa(...)
+---
 
-The class constructor configures the model parameters and transforms the data according to the specified functional form.
+## API Reference: SFA Class
 
-**Parameters:**
-* y (array-like): dependent variable (output for production frontier, cost for cost frontier).
-* x (array-like, 2d): independent variables (inputs or prices/outputs).
-* z (array-like, 2d, optional): explanatory variables for inefficiency (cross-sectional data only).
-* id_var (array-like, optional): individual identifiers for panel data.
-* time_var (array-like, optional): time variable for panel data.
-* fun (constant): frontier type. Use sfa.fun_prod (default) or sfa.fun_cost.
-* intercept (bool): include an intercept in the model (default: true).
-* lamda0 (float): initial value of lambda for mle optimization (default: 1).
-* method (constant): method for computing technical efficiency. Choose among sfa.te_tej (jondrow et al.), sfa.te_te (battese and coelli), or sfa.te_temod.
-* form (str): functional form. Choose among 'linear', 'cobb_douglas', or 'translog'.
-* dummy_indices (list): list of column indices in x that are indicator variables (0/1) and should not be log-transformed.
+### Constructor Parameters
 
-### Public methods
+| Parameter | Type | Description |
+| :--- | :--- | :--- |
+| y | array | Dependent variable (Output for production, Cost for cost frontier). |
+| x | array | Independent variables (Inputs or Price/Output mix). |
+| z | array | (Optional) Determinants of inefficiency (BC95 model). |
+| id_var | array | Individual identifiers (Required for panel models). |
+| time_var | array | Time/Year variable (Required for BC92 model). |
+| fun | int | FUN_PROD (0) or FUN_COST (1). |
+| form | str | Functional form: 'linear', 'cobb_douglas', or 'translog'. |
+| standardize| bool | If True, centers and scales continuous variables automatically. |
+| draws | int | Number of MCMC draws if using PyMC (default: 2000). |
 
-Once the model is instantiated, the following methods are available. Calling any of these methods will automatically trigger the estimation process (optimize()) if it has not already been executed.
+### Core Methods
 
-* optimize(): triggers the estimation algorithm. Automatically routes to panel estimation (mcmc) or cross-sectional estimation (mle, with an mcmc fallback in case of convergence failure).
-* summary(): computes and prints a summary table of the results to the console, including estimated coefficients, standard errors, t-values, p-values, associated significance levels, and the log-likelihood value (for mle).
-* get_beta(): returns a numpy array containing the estimated coefficients for the frontier variables (including the intercept if intercept=true).
-* get_residuals(): returns a numpy array containing the model residuals.
-* get_sigma2(): returns the estimated total variance of the composite error.
-* get_lambda(): returns the ratio of standard deviations, which measures the relative importance of inefficiency compared to statistical noise.
-* get_technical_efficiency(): returns a numpy array containing the technical efficiency scores (bounded between 0 and 1) computed for each observation in the sample, using the method specified during instantiation.
+Calling these methods will automatically trigger the optimize() routine if the model hasn't been estimated yet.
 
-## Credits and licenses
+* summary(): Prints a detailed results table including Coefficients, Std. Errors, z-values, and P-values.
+* get_technical_efficiency(): Returns technical efficiency scores (bounded between 0 and 1).
+* get_beta(): Returns the estimated frontier coefficients.
+* get_residuals(): Returns the composite error terms (v_i +/- u_i).
+* get_lambda(): Returns the signal-to-noise ratio (sigma_u / sigma_v).
 
-This software is distributed under the mit license.
+---
 
-* The base architecture, matrix processing, and classic log-likelihood derivations are inspired by and adapted from the work of sheng dai (copyright (c) 2023, mit license).
-* The integration of bayesian estimators (markov chain monte carlo via pymc), the numerical stabilization of panel models (battese and coelli 1992), and the algorithmic exception handling were developed specifically for this project.
+## MLE vs. PyMC
+
+* **MLE (Maximum Likelihood)**: Fast and standard. Best for large, balanced cross-sections. It may suffer from "boundary failures" (where inefficiency variance collapses to zero) on small or unbalanced panels.
+* **PyMC (Bayesian Inference)**: Highly robust. By using prior distributions, it prevents variance collapse and successfully separates noise from inefficiency even in datasets with many singletons (unbalanced panels). It provides full posterior distributions for all parameters.
+
+---
+
+## Credits & License
+
+Distributed under the **MIT License**.
+* Base architecture and likelihood derivations inspired by Sheng Dai (2023).
+* Bayesian integration, numerical stabilization, and panel model extensions developed for the Depp project.
