@@ -13,7 +13,7 @@ build:
 # Configuration de Sphinx
 sphinx:
   builder: html
-  configuration: docs/conf.py  # <-- Vérifie que ton fichier conf.py est bien dans un dossier 'docs'
+  configuration: docs/source/conf.py  # <-- Vérifie que ton fichier conf.py est bien dans un dossier 'docs'
 
 # Installation des dépendances
 python:
