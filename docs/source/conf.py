@@ -13,7 +13,7 @@ release = '1.0.0'
 
 
 html_theme = 'alabaster'
-html_static_path = ['_static']
+#html_static_path = ['_static']
 
 import os
 import sys
@@ -23,5 +23,7 @@ extensions = [
     'sphinx.ext.autodoc',      
     'sphinx.ext.viewcode',     
 ]
+
+autodoc_mock_imports = ["statsmodels", "pymc", "pandas", "numpy", "scipy", "arviz", "matplotlib"]
 
 html_theme = 'sphinx_rtd_theme'
