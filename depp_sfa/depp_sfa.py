@@ -19,6 +19,7 @@ from sklearn.preprocessing import StandardScaler
 from statsmodels.tools.numdiff import approx_hess
 import pymc as pm
 
+# warnings.filterwarnings("ignore", module="arviz")
 
 from . import constant
 
@@ -621,7 +622,7 @@ class SFA:
             trace = pm.sample(
                 draws=self.draws, 
                 tune=self.tune, 
-                target_accept=0.999, 
+                target_accept=0.9999, 
                 progressbar=True, 
                 return_inferencedata=True
             )

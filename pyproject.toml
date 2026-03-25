@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "depp_sfa"
-version = "0.1.0"
+version = "0.1.1"
 authors = [
   { name="Thomas Lucereau", email="divers.thomas.lcu@gmail.com" },
 ]
@@ -36,7 +36,8 @@ dependencies = [
     "pandas",
     "scipy",
     "scikit-learn",
-    "pymc"
+    "pymc",
+    "statsmodels"
 ]
 
 [project.urls]
