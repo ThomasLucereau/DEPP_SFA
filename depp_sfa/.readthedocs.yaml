@@ -1,0 +1,25 @@
+# .readthedocs.yaml
+# Read the Docs configuration file
+# See https://docs.readthedocs.io/en/stable/config-file/v2.html for details
+
+version: 2
+
+# Choix de l'OS et de la version Python pour le serveur de build
+build:
+  os: ubuntu-22.04
+  tools:
+    python: "3.10"
+
+# Configuration de Sphinx
+sphinx:
+  builder: html
+  configuration: docs/conf.py  # <-- Vérifie que ton fichier conf.py est bien dans un dossier 'docs'
+
+# Installation des dépendances
+python:
+  install:
+    # 1. On installe ton package lui-même pour que Sphinx (autodoc) puisse le lire
+    - method: pip
+      path: .
+    # 2. (Optionnel) Si tu as des dépendances spécifiques pour la doc (ex: un thème)
+    # - requirements: docs/requirements.txt
