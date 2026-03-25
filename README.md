@@ -1,5 +1,7 @@
 # Depp_sfa: stochastic frontier analysis
 
+[![Documentation Status](https://readthedocs.org/projects/depp-sfa/badge/?version=latest)](https://depp-sfa.readthedocs.io/en/latest/?badge=latest)
+
 Depp_sfa is a python library dedicated to the estimation of stochastic frontier analysis (sfa) models. 
 
 It is designed to provide high robustness against the numerical convergence issues frequently encountered in applied econometrics. For cross-sectional data, the library relies primarily on maximum likelihood estimation (mle), featuring an automatic fallback to bayesian estimation (mcmc via pymc) in the event of optimization failure. For panel data, it implements a strictly bayesian estimation of the dynamic battese and coelli (1992) model.
@@ -26,7 +28,7 @@ Pymc (bayesian inference) is the robust alternative. By integrating prior distri
 The library can be installed directly from its git repository:
 
 ```bash
-pip install -U git+https://github.com/ThomasLucereau/depp_SFA.git
+pip install depp_sfa
 ```
 
 ## Usage and data preparation
