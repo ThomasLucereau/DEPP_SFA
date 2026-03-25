@@ -30,7 +30,7 @@ pip install depp_sfa
 
 The library can automatically handle data scaling and functional form transformations (logs, interactions, and squares).
 
-# --- PYTHON START ---
+```python
 import pandas as pd
 import numpy as np
 from depp_sfa import SFA, FUN_COST
@@ -54,7 +54,7 @@ model.summary()
 
 # 4. Retrieve Efficiency Scores (TE)
 te_scores = model.get_technical_efficiency()
-# --- PYTHON END ---
+```
 
 ---
 
