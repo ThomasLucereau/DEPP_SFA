@@ -18,7 +18,7 @@ documentation for details.
 API Reference
 =============
 
-.. autoclass:: depp_sfa.depp_sfa
+.. autoclass:: depp_sfa.depp_sfa.SFA
    :members:
    :undoc-members:
    :show-inheritance:
