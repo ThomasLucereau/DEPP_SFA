@@ -22,4 +22,4 @@ python:
     - method: pip
       path: .
     # 2. (Optionnel) Si tu as des dépendances spécifiques pour la doc (ex: un thème)
-    # - requirements: docs/requirements.txt
+    - requirements: docs/requirements.txt
