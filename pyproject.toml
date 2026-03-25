@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "depp_sfa"
-version = "0.1.1"
+version = "0.1.2"
 authors = [
   { name="Thomas Lucereau", email="divers.thomas.lcu@gmail.com" },
 ]

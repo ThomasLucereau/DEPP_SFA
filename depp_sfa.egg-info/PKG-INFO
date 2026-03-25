@@ -20,6 +20,7 @@ Requires-Dist: pandas
 Requires-Dist: scipy
 Requires-Dist: scikit-learn
 Requires-Dist: pymc
+Requires-Dist: statsmodels
 Dynamic: license-file
 
 # Depp_sfa: stochastic frontier analysis
