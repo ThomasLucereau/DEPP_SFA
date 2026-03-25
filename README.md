@@ -21,9 +21,9 @@
 
 Install the library directly from the repository:
 
-'''
+``
 pip install depp_sfa
-'''
+``
 ---
 
 ## Quick Start
