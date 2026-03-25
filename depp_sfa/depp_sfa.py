@@ -902,3 +902,15 @@ class SFA:
         if not np.isnan(self._llf):
             print(f"Log-Likelihood:  {self._llf:.5f}")
         print("=" * 75)
+        
+        if self.standardize:
+            std_vars = [name for name in self.x_names if not name.startswith('d_') and 'contract_type' not in name]
+            print("\nInterpretation Note:")
+            print("The following continuous variables have been standardized (mean=0, std=1):")
+            import textwrap
+            wrapped_vars = textwrap.fill(", ".join(std_vars), width=76, initial_indent="  ", subsequent_indent="  ")
+            print(wrapped_vars)
+            print("\n  -> A coefficient of \u03B2 implies that a 1 standard deviation increase")
+            print("     in the explanatory variable results in a \u03B2 unit change in the")
+            print("     dependent variable (e.g., log_cost).")
+        print("\n")
