@@ -24,6 +24,14 @@ extensions = [
     'sphinx.ext.viewcode',     
 ]
 
-autodoc_mock_imports = ["statsmodels", "pymc", "pandas", "numpy", "scipy", "arviz", "matplotlib"]
-
+autodoc_mock_imports = [
+    "statsmodels", 
+    "pymc", 
+    "pandas", 
+    "numpy", 
+    "scipy", 
+    "arviz", 
+    "matplotlib", 
+    "sklearn"      
+]
 html_theme = 'sphinx_rtd_theme'
