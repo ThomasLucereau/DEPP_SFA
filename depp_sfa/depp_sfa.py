@@ -19,7 +19,7 @@ from sklearn.preprocessing import StandardScaler
 from statsmodels.tools.numdiff import approx_hess
 import pymc as pm
 
-# warnings.filterwarnings("ignore", module="arviz")
+warnings.filterwarnings("ignore", module="arviz")
 
 from . import constant
 
@@ -548,7 +548,7 @@ class SFA:
             mu_final = mu_y - U if self.sign == 1 else mu_y + U
             pm.Normal('Y_obs', mu=mu_final, sigma=sigma_v, observed=self.y)
 
-            trace = pm.sample(draws=self.draws, tune=self.tune, target_accept=0.999, progressbar=True, return_inferencedata=True)
+            trace = pm.sample(draws=self.draws, tune=self.tune, target_accept=0.99, progressbar=True, return_inferencedata=True)
             self.__extract_pymc_params(trace, model_type='cross')
 
     def __optimize_pymc_panel(self):
@@ -586,7 +586,7 @@ class SFA:
             mu_final = mu_y - U_it if self.sign == 1 else mu_y + U_it
             pm.Normal('Y_obs', mu=mu_final, sigma=sigma_v, observed=self.y)
 
-            trace = pm.sample(draws=self.draws, tune=self.tune, target_accept=0.999, progressbar=True, return_inferencedata=True)
+            trace = pm.sample(draws=self.draws, tune=self.tune, target_accept=0.99, progressbar=True, return_inferencedata=True)
             self.__extract_pymc_params(trace, model_type='panel')
             
     def __optimize_pymc_greene_tre(self):
@@ -622,7 +622,7 @@ class SFA:
             trace = pm.sample(
                 draws=self.draws, 
                 tune=self.tune, 
-                target_accept=0.9999, 
+                target_accept=0.99, 
                 progressbar=True, 
                 return_inferencedata=True
             )
